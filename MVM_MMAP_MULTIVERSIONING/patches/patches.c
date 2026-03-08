@@ -11,15 +11,13 @@
 #include "memory.h"
 #include "run.h"
 
-#ifndef MVMM_MAX_VERSIONS
-#define MVMM_MAX_VERSIONS 2
-#endif
-
-#ifdef MMAP_MV_STORE
-#if MVMM_MAX_VERSIONS < 2
-#error "MMAP_MV_STORE requires MVMM_MAX_VERSIONS >= 2"
-#endif
-#endif
+/* MVMM usa sempre due slot per pagina e alterna tra i due durante il COW. */
+enum
+{
+    MVMM_SLOT_0 = 0u,
+    MVMM_SLOT_1 = 1u,
+    MVMM_NUM_SLOTS = 2u
+};
 
 #ifdef MMAP_MV_STORE_GRID
 #ifndef MMAP_MV_STORE
@@ -35,60 +33,43 @@
 #define MVMM_GRID_SIZE 64
 #endif
 
-#define MVMM_DEBUG 0
-
-// se il flag é abilitato posso evitare di riallocare memoria ogni volta che faccio copy on write
-// serve per il benchmark
-#define SINGLE_THREAD 1
-
-#if MVMM_DEBUG
-#define MVMM_LOG(...) fprintf(stderr, __VA_ARGS__)
-#else
-#define MVMM_LOG(...) \
-    do                \
-    {                 \
-    } while (0)
-#endif
-
-/*
- * Stato per pagina
- * Lo slot 0 all’inizio punta alla pagina reale della mmap
- */
+/* Stato MVMM associato a una singola pagina della regione tracciata. */
 typedef struct
 {
-    uint64_t last_ts_seen;               // ultimo ts per cui ho cambiato versione
-    uint64_t last_touched_ts;            // ultimo ts in cui la pagina e' stata toccata in store
-    uint32_t cur_slot;                   // slot corrente per load/store
-    uint64_t slot_ts[MVMM_MAX_VERSIONS]; // timestamp di ogni slot
-    void *slots[MVMM_MAX_VERSIONS];      // ptr pagina per ogni slot
+    uint64_t last_ts_seen;            // Ultimo epoch in cui e' stato aperto un nuovo slot.
+    uint64_t last_touched_ts;         // Ultimo epoch in cui la pagina e' stata toccata da una store.
+    uint32_t cur_slot;                // Slot attualmente pubblicato per load/store.
+    uint64_t slot_ts[MVMM_NUM_SLOTS]; // Epoch associato a ciascuno slot.
+    void *slots[MVMM_NUM_SLOTS];      // Buffer fisici dei due slot.
 } mvmm_page_state;
 
-/*
- * Stato per regione (mmap)
- */
+/* Stato MVMM associato a una singola regione ottenuta via mmap. */
 typedef struct
 {
-    uintptr_t base;         // base della regione mmap
-    size_t len;             // lunghezza della regione
-    size_t npages;          // numero di pagine
-    mvmm_page_state *pages; // array di stati per pagina
+    uintptr_t base;         // Base della regione mmap tracciata.
+    size_t len;             // Lunghezza in byte della regione.
+    size_t npages;          // Numero di pagine logiche nella regione.
+    mvmm_page_state *pages; // Stato MVMM per ogni pagina della regione.
 #ifdef MMAP_MV_STORE_GRID
     size_t grid_cells_per_page;
     size_t grid_bitmap_bytes;
     uint8_t *grid_curr;
 #endif
 
-    // Liste pagine toccate negli ultimi due epoch (per rollback rapido).
+    // Pagine toccate nell'epoch corrente, usate per il rollback rapido.
     size_t *touched_curr;
     size_t touched_curr_count;
     uint64_t touched_curr_ts;
 
+#ifndef MMAP_MV_STORE_GRID
+    // Pagine toccate nell'epoch precedente, usate solo nella variante non-grid.
     size_t *touched_prev;
     size_t touched_prev_count;
     uint64_t touched_prev_ts;
+#endif
 } mvmm_region;
 
-// Round corrente di checkpoint/rollback. Parte da 0 per l'INIT snapshot.
+/* Epoch globale del motore di checkpoint/rollback. Parte da 0 all'init. */
 static volatile uint64_t g_epoch_round = 0;
 static volatile uint64_t g_ckpt_counter = 0;
 
@@ -99,22 +80,20 @@ void *__real_memcpy(void *dest, const void *src, size_t n);
 #define MVMM_MEMCPY memcpy
 #endif
 
-/*
- * linked list delle regioni mmappate da tracciare.
- */
+/* Nodo della lista globale delle regioni mmap tracciate da MVMM. */
 typedef struct mvmm_region_node
 {
     mvmm_region r;
     struct mvmm_region_node *next;
 } mvmm_region_node;
 
-// Lista regioni registrate (una per mmap)
+/* Lista globale delle regioni registrate dal wrapper di mmap. */
 static mvmm_region_node *g_regions_head = NULL;
 
-// Hot cache per-thread dell'ultima regione trovata.
+/* Cache thread-local dell'ultima regione usata per accelerare i lookup. */
 static __thread mvmm_region *g_cached_region = NULL;
 
-// Allocatore PARSIR: una regione mmap per object.
+/* Base delle regioni dell'allocatore PARSIR, una per object. */
 extern void *base[OBJECTS];
 
 static inline uintptr_t mvmm_translate_ea(mvmm_region *r, uintptr_t ea, int is_store);
@@ -127,11 +106,7 @@ void *mmap_mv_memcpy(void *dest, const void *src, size_t n) __attribute__((used)
 void *__wrap_memcpy(void *dest, const void *src, size_t n) __attribute__((used));
 #endif
 
-/*
- * Alloca una pagina allineata a g_page_size
- *
- * posix_memalign per garantire l’allineamento, al contrario di malloc
- */
+/* Alloca una pagina allineata a MVMM_PAGE_SIZE per gli slot dinamici. */
 static inline void *mvmm_alloc_page(void)
 {
 
@@ -143,20 +118,18 @@ static inline void *mvmm_alloc_page(void)
     return p;
 }
 
-/* Ritorna 1 se l'indirizzo a appartiene alla regione r */
-static inline int mvmm_region_contains(const mvmm_region *r, uintptr_t a)
+/* Restituisce vero se l'indirizzo appartiene alla regione indicata. */
+static inline int mvmm_region_contains(const mvmm_region *r, uintptr_t address)
 {
-    return (a >= r->base && a < r->base + r->len);
+    return (address >= r->base && address < r->base + r->len);
 }
 
-/*
- * Trova la regione che contiene l’indirizzo effettivo
- */
-static inline mvmm_region *mvmm_find_region(uintptr_t ea)
+/* Cerca linearmente la regione che contiene l'indirizzo richiesto. */
+static inline mvmm_region *mvmm_find_region(uintptr_t address)
 {
     for (mvmm_region_node *n = g_regions_head; n != NULL; n = n->next)
     {
-        if (mvmm_region_contains(&n->r, ea))
+        if (mvmm_region_contains(&n->r, address))
         {
             return &n->r;
         }
@@ -164,22 +137,21 @@ static inline mvmm_region *mvmm_find_region(uintptr_t ea)
     return NULL;
 }
 
-/*
- * Fast-path: prova prima con la regione usata dall'ultimo accesso del thread.
- */
-static inline mvmm_region *mvmm_find_region_cached(uintptr_t ea)
+/* Cerca una regione usando prima la cache thread-local e poi la lista globale. */
+static inline mvmm_region *mvmm_find_region_cached(uintptr_t address)
 {
     mvmm_region *cached = g_cached_region;
-    if (cached && mvmm_region_contains(cached, ea))
+    if (cached && mvmm_region_contains(cached, address))
     {
         return cached;
     }
 
-    cached = mvmm_find_region(ea);
+    cached = mvmm_find_region(address);
     g_cached_region = cached;
     return cached;
 }
 
+/* Risolve la regione MVMM associata all'object PARSIR indicato. */
 static inline mvmm_region *mvmm_find_region_for_object(int object)
 {
     if (object < 0 || object >= OBJECTS)
@@ -193,11 +165,13 @@ static inline mvmm_region *mvmm_find_region_for_object(int object)
 
 #ifdef MMAP_MV_STORE
 #ifdef MMAP_MV_STORE_GRID
+/* Restituisce il bitmap delle celle sporche per la pagina indicata. */
 static inline uint8_t *mvmm_store_grid_bitmap(mvmm_region *r, size_t page_idx)
 {
     return r->grid_curr + page_idx * r->grid_bitmap_bytes;
 }
 
+/* Restituisce la dimensione reale della cella di griglia dentro la pagina. */
 static inline size_t mvmm_store_grid_cell_size(const mvmm_region *r, size_t cell_idx)
 {
     size_t start = cell_idx * MVMM_GRID_SIZE;
@@ -212,26 +186,26 @@ static inline size_t mvmm_store_grid_cell_size(const mvmm_region *r, size_t cell
     return len;
 }
 
+/* Verifica se la cella di griglia e' gia' stata snapshotata nell'epoch corrente. */
 static inline int mvmm_store_grid_cell_is_set(const uint8_t *bitmap, size_t cell_idx)
 {
     return (bitmap[cell_idx >> 3] >> (cell_idx & 7)) & 1u;
 }
 
+/* Marca una cella di griglia come gia' snapshotata. */
 static inline void mvmm_store_grid_cell_set(uint8_t *bitmap, size_t cell_idx)
 {
     bitmap[cell_idx >> 3] |= (uint8_t)(1u << (cell_idx & 7));
 }
 #endif
 
+/* Ruota le touched-list quando cambia l'epoch osservato dalla variante store. */
 static inline void mvmm_store_rotate_touched(mvmm_region *r, uint64_t ts)
 {
     if (r->touched_curr_ts == ts)
         return;
 
-#ifdef MMAP_MV_STORE_GRID
-    r->touched_prev_count = 0;
-    r->touched_prev_ts = UINT64_MAX;
-#else
+#ifndef MMAP_MV_STORE_GRID
     r->touched_prev_count = r->touched_curr_count;
     r->touched_prev_ts = r->touched_curr_ts;
     if (r->touched_prev_count > 0)
@@ -243,14 +217,55 @@ static inline void mvmm_store_rotate_touched(mvmm_region *r, uint64_t ts)
     r->touched_curr_ts = ts;
 }
 
+/* Registra una pagina come toccata una sola volta per epoch. */
+static inline void mvmm_store_note_page_touch(mvmm_region *r,
+                                              mvmm_page_state *ps,
+                                              size_t page_idx,
+                                              uint64_t ts)
+{
+    mvmm_store_rotate_touched(r, ts);
+
+    if (ps->last_touched_ts == ts)
+        return;
+
+    ps->last_touched_ts = ts;
+    r->touched_curr[r->touched_curr_count++] = page_idx;
+}
+
+/* Garantisce che lo slot di snapshot esista ed e' pronto per l'epoch corrente. */
+static inline int mvmm_store_prepare_snapshot_slot(mvmm_region *r,
+                                                   mvmm_page_state *ps,
+                                                   size_t page_idx,
+                                                   uint64_t ts)
+{
+    mvmm_store_note_page_touch(r, ps, page_idx, ts);
+
+    if (ps->slots[MVMM_SLOT_1] == NULL)
+    {
+        ps->slots[MVMM_SLOT_1] = mvmm_alloc_page();
+        if (!ps->slots[MVMM_SLOT_1])
+            return 0;
+    }
+
 #ifdef MMAP_MV_STORE_GRID
+    if (ps->slot_ts[MVMM_SLOT_1] != ts)
+    {
+        memset(mvmm_store_grid_bitmap(r, page_idx), 0, r->grid_bitmap_bytes);
+        ps->slot_ts[MVMM_SLOT_1] = ts;
+    }
+#endif
+
+    return 1;
+}
+
+#ifdef MMAP_MV_STORE_GRID
+/* Snapshotta solo le celle toccate dell'intervallo richiesto nella pagina. */
 static inline int mvmm_store_snapshot_page_cells(mvmm_region *r,
                                                  size_t page_idx,
                                                  size_t page_off_start,
                                                  size_t page_off_end,
                                                  uint64_t ts)
 {
-    uint32_t snapshot_slot = 1u;
     mvmm_page_state *ps = &r->pages[page_idx];
     uint8_t *bitmap;
     size_t first_cell;
@@ -259,26 +274,8 @@ static inline int mvmm_store_snapshot_page_cells(mvmm_region *r,
     if (page_off_start >= page_off_end)
         return 1;
 
-    mvmm_store_rotate_touched(r, ts);
-
-    if (ps->last_touched_ts != ts)
-    {
-        ps->last_touched_ts = ts;
-        r->touched_curr[r->touched_curr_count++] = page_idx;
-    }
-
-    if (ps->slots[snapshot_slot] == NULL)
-    {
-        ps->slots[snapshot_slot] = mvmm_alloc_page();
-        if (!ps->slots[snapshot_slot])
-            return 0;
-    }
-
-    if (ps->slot_ts[snapshot_slot] != ts)
-    {
-        memset(mvmm_store_grid_bitmap(r, page_idx), 0, r->grid_bitmap_bytes);
-        ps->slot_ts[snapshot_slot] = ts;
-    }
+    if (!mvmm_store_prepare_snapshot_slot(r, ps, page_idx, ts))
+        return 0;
 
     bitmap = mvmm_store_grid_bitmap(r, page_idx);
     first_cell = page_off_start / MVMM_GRID_SIZE;
@@ -297,8 +294,8 @@ static inline int mvmm_store_snapshot_page_cells(mvmm_region *r,
         if (cell_len == 0)
             continue;
 
-        MVMM_MEMCPY((uint8_t *)ps->slots[snapshot_slot] + cell_off,
-                    (uint8_t *)ps->slots[0] + cell_off,
+        MVMM_MEMCPY((uint8_t *)ps->slots[MVMM_SLOT_1] + cell_off,
+                    (uint8_t *)ps->slots[MVMM_SLOT_0] + cell_off,
                     cell_len);
         mvmm_store_grid_cell_set(bitmap, cell_idx);
     }
@@ -308,42 +305,28 @@ static inline int mvmm_store_snapshot_page_cells(mvmm_region *r,
 }
 #endif
 
+/* Snapshotta l'intera pagina oppure delega alla variante grid se attiva. */
 static inline int mvmm_store_snapshot_page(mvmm_region *r, size_t page_idx, uint64_t ts)
 {
 #ifdef MMAP_MV_STORE_GRID
     return mvmm_store_snapshot_page_cells(r, page_idx, 0, MVMM_PAGE_SIZE, ts);
 #else
-    uint32_t snapshot_slot = 1u;
     mvmm_page_state *ps = &r->pages[page_idx];
-    void *snapshot;
 
-    mvmm_store_rotate_touched(r, ts);
+    if (!mvmm_store_prepare_snapshot_slot(r, ps, page_idx, ts))
+        return 0;
 
-    if (ps->last_touched_ts != ts)
-    {
-        ps->last_touched_ts = ts;
-        r->touched_curr[r->touched_curr_count++] = page_idx;
-    }
-
-    if (ps->slot_ts[snapshot_slot] == ts)
+    if (ps->slot_ts[MVMM_SLOT_1] == ts)
         return 1;
 
-    snapshot = ps->slots[snapshot_slot];
-    if (!snapshot)
-    {
-        snapshot = mvmm_alloc_page();
-        if (!snapshot)
-            return 0;
-        ps->slots[snapshot_slot] = snapshot;
-    }
-
-    MVMM_MEMCPY(snapshot, ps->slots[0], MVMM_PAGE_SIZE);
-    ps->slot_ts[snapshot_slot] = ts;
+    MVMM_MEMCPY(ps->slots[MVMM_SLOT_1], ps->slots[MVMM_SLOT_0], MVMM_PAGE_SIZE);
+    ps->slot_ts[MVMM_SLOT_1] = ts;
     ps->last_ts_seen = ts;
     return 1;
 #endif
 }
 
+/* Snapshotta tutte le pagine coperte da una store o da una memcpy su intervallo. */
 static inline void mvmm_store_snapshot_range(uintptr_t dst, size_t n)
 {
     uintptr_t cur = dst;
@@ -386,23 +369,16 @@ static inline void mvmm_store_snapshot_range(uintptr_t dst, size_t n)
 }
 #endif
 
-/*
- * Restituisce il puntatore alla pagina corrente per quella pagina logica
- * param r: la regione trovata da mvmm_find_region
- * param page_idx: indice della pagina
- */
-static inline void *mvmm_cur_page_ptr(const mvmm_region *r, size_t page_idx)
+/* Restituisce il buffer fisico pubblicato per la pagina logica richiesta. */
+static inline void *mvmm_get_current_page_ptr(const mvmm_region *r, size_t page_idx)
 {
     mvmm_page_state *ps = &r->pages[page_idx];
     uint32_t slot = ps->cur_slot;
     return ps->slots[slot];
 }
 
-/*
- * Calcola l’EA usando i metadati MVM e lo snapshot dei registri.
- * Se ins->effective_operand_address è già valorizzato, lo usa direttamente.
- */
-static inline uintptr_t mvm_get_ea_u(instruction_record *ins, unsigned long regs)
+/* Calcola l'effective address della memory instruction a partire dai registri salvati. */
+static inline uintptr_t mvmm_compute_effective_address(instruction_record *ins, unsigned long regs)
 {
     if (ins->effective_operand_address != 0x0)
     {
@@ -411,36 +387,27 @@ static inline uintptr_t mvm_get_ea_u(instruction_record *ins, unsigned long regs
 
     target_address *t = &ins->target;
 
-    // 8* perché i registri sono a 8 byte di distanza l’uno dall’altro
-    // puntatore a registri (regs) + 8*(indice-1) per trovare quello giusto
-    unsigned long A = 0, B = 0;
+    /* I registri nello snapshot sono memorizzati a stride di 8 byte. */
+    unsigned long base_reg_value = 0;
+    unsigned long index_reg_value = 0;
     if (t->base_index)
-        MVMM_MEMCPY(&A, (void *)(regs + 8 * (t->base_index - 1)), 8);
+        MVMM_MEMCPY(&base_reg_value, (void *)(regs + 8 * (t->base_index - 1)), 8);
     if (t->scale_index)
-        MVMM_MEMCPY(&B, (void *)(regs + 8 * (t->scale_index - 1)), 8);
+        MVMM_MEMCPY(&index_reg_value, (void *)(regs + 8 * (t->scale_index - 1)), 8);
 
     long disp = (long)t->displacement;
-    long base = (long)A;
-    long idx = (long)B;
+    long base = (long)base_reg_value;
+    long idx = (long)index_reg_value;
     long sc = (long)t->scale;
 
     return (uintptr_t)(disp + base + idx * sc);
 }
 
-/*
- * Riscrive il registro base in modo che l’istruzione originale, quando riprende, acceda a ea_prime.
- *
- * Solo indirizzamenti del tipo:
- *   [base + displacement]
- * quindi:
- * - no RIP-relative (non posso modificare RIP)
- * - base_index deve esserci
- * - scale_index deve essere 0
- */
+/* Riscrive il registro base per far puntare l'istruzione originale allo slot tradotto. */
 static inline int mvmm_rewrite_base_reg_for_ea(instruction_record *ins,
                                                unsigned long regs,
-                                               uintptr_t ea,       // indirizzo originale
-                                               uintptr_t ea_prime) // indirizzo dello slot corrente
+                                               uintptr_t ea,
+                                               uintptr_t ea_prime)
 {
     if (ins->rip_relative == 'y')
         return 0;
@@ -452,29 +419,26 @@ static inline int mvmm_rewrite_base_reg_for_ea(instruction_record *ins,
     if (t->scale_index != 0)
         return 0;
 
-    // il delta é di quanto spostare il registro base
+    /* Il delta rappresenta lo scostamento tra indirizzo originale e indirizzo tradotto. */
     intptr_t delta = (intptr_t)(ea_prime - ea);
     if (delta == 0)
         return 1;
 
     uint64_t base_val = 0;
-    void *base_slot = (void *)(regs + 8 * (t->base_index - 1)); // prendo il registro base di regs perché acceda a ea_prime
+    void *base_slot = (void *)(regs + 8 * (t->base_index - 1));
     MVMM_MEMCPY(&base_val, base_slot, 8);
 
     base_val = (uint64_t)((intptr_t)base_val + delta);
-    MVMM_MEMCPY(base_slot, &base_val, 8); // faccio il side effect sul registro base
+    MVMM_MEMCPY(base_slot, &base_val, 8);
     return 1;
 }
 
-/*
- * Registra una nuova regione mmap nella lista globale.
- */
+/* Registra una nuova regione mmap nella lista globale del backend MVMM. */
 static void mvmm_region_register(void *base, size_t len)
 {
     if (base == MAP_FAILED || base == NULL || len == 0)
         return;
 
-    // Alloca il nodo
     mvmm_region_node *node = (mvmm_region_node *)calloc(1, sizeof(*node));
     if (!node)
     {
@@ -510,12 +474,20 @@ static void mvmm_region_register(void *base, size_t len)
 #endif
 
     r->touched_curr = (size_t *)calloc(r->npages, sizeof(size_t));
+#ifndef MMAP_MV_STORE_GRID
     r->touched_prev = (size_t *)calloc(r->npages, sizeof(size_t));
+#endif
+#ifdef MMAP_MV_STORE_GRID
+    if (!r->touched_curr)
+#else
     if (!r->touched_curr || !r->touched_prev)
+#endif
     {
         fprintf(stderr, "[mvmm] alloc touched-pages lists failed\n");
         free(r->touched_curr);
+#ifndef MMAP_MV_STORE_GRID
         free(r->touched_prev);
+#endif
 #ifdef MMAP_MV_STORE_GRID
         free(r->grid_curr);
 #endif
@@ -524,9 +496,11 @@ static void mvmm_region_register(void *base, size_t len)
         abort();
     }
     r->touched_curr_count = 0;
-    r->touched_prev_count = 0;
     r->touched_curr_ts = UINT64_MAX;
+#ifndef MMAP_MV_STORE_GRID
+    r->touched_prev_count = 0;
     r->touched_prev_ts = UINT64_MAX;
+#endif
 
     /*
      * Inizializza ogni pagina.
@@ -538,30 +512,25 @@ static void mvmm_region_register(void *base, size_t len)
     {
         mvmm_page_state *ps = &r->pages[i];
 
-        ps->last_ts_seen = UINT64_MAX; // timestamp impossibile
+        ps->last_ts_seen = UINT64_MAX;
         ps->last_touched_ts = UINT64_MAX;
-        ps->cur_slot = 0;
+        ps->cur_slot = MVMM_SLOT_0;
 
-        ps->slots[0] = (void *)(r->base + i * MVMM_PAGE_SIZE);
-        ps->slot_ts[0] = UINT64_MAX;
+        ps->slots[MVMM_SLOT_0] = (void *)(r->base + i * MVMM_PAGE_SIZE);
+        ps->slot_ts[MVMM_SLOT_0] = UINT64_MAX;
 
-        for (uint32_t s = 1; s < MVMM_MAX_VERSIONS; s++)
-        {
-            ps->slots[s] = NULL;
-            ps->slot_ts[s] = UINT64_MAX;
-        }
+        ps->slots[MVMM_SLOT_1] = NULL;
+        ps->slot_ts[MVMM_SLOT_1] = UINT64_MAX;
     }
 
-    // aggiungi nuova regione in testa alla lista
     node->next = g_regions_head;
     g_regions_head = node;
 
-    MVMM_LOG("[mvmm] region registered base=%p len=%zu pages=%zu page_size=%d\n",
-            base, len, r->npages, MVMM_PAGE_SIZE);
 }
 
 void *__real_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset);
 
+/* Wrapper del linker per mmap: registra automaticamente ogni nuova regione tracciabile. */
 void *__wrap_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset)
 {
     void *p = __real_mmap(addr, length, prot, flags, fd, offset);
@@ -572,6 +541,7 @@ void *__wrap_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t 
     return p;
 }
 
+/* memcpy consapevole di MVMM: snapshotta o traduce gli indirizzi prima di copiare. */
 void *mmap_mv_memcpy(void *dest, const void *src, size_t n)
 {
 #ifdef MMAP_MV_STORE
@@ -598,16 +568,14 @@ void *mmap_mv_memcpy(void *dest, const void *src, size_t n)
 }
 
 #ifdef MMAP_MV_STORE
+/* Wrapper del linker per inoltrare memcpy standard alla variante MVMM-aware. */
 void *__wrap_memcpy(void *dest, const void *src, size_t n)
 {
     return mmap_mv_memcpy(dest, src, n);
 }
 #endif
 
-/*
- * Traduce l'indirizzo effettivo ea verso la versione corrente della pagina.
- *
- */
+/* Traduce un effective address verso il buffer MVMM corretto per la pagina corrente. */
 static inline uintptr_t mvmm_translate_ea(mvmm_region *r,
                                           uintptr_t ea,
                                           int is_store)
@@ -634,13 +602,11 @@ static inline uintptr_t mvmm_translate_ea(mvmm_region *r,
 
     return ea;
 #else
-    // se é una scrittura aumenta il contatore e fai copy on write se comincia una nuova era
+    /* Nella variante base le store aprono una nuova versione al primo write dell'epoch. */
     if (is_store)
     {
-        // Versione corrente guidata dall'epoch del motore.
         uint64_t ts = __atomic_load_n(&g_epoch_round, __ATOMIC_ACQUIRE);
 
-        // Ruota i buffer touched quando cambia epoch.
         if (r->touched_curr_ts != ts)
         {
             r->touched_prev_count = r->touched_curr_count;
@@ -653,29 +619,20 @@ static inline uintptr_t mvmm_translate_ea(mvmm_region *r,
             r->touched_curr_ts = ts;
         }
 
-        // Registra una sola volta per pagina/epoch nella lista touched corrente.
         if (ps->last_touched_ts != ts)
         {
             ps->last_touched_ts = ts;
             r->touched_curr[r->touched_curr_count++] = page_idx;
         }
 
-        // 1 sola copy on write per pagina per round del motore.
+        /* Apre il secondo slot solo alla prima store osservata per quell'epoch. */
         if (ps->last_ts_seen != ts)
         {
             ps->last_ts_seen = ts;
             uint32_t cur = ps->cur_slot;
-#if MVMM_MAX_VERSIONS == 2
             uint32_t next = cur ^ 1u;
-#else
-            uint32_t next = cur + 1u;
-            if (next >= MVMM_MAX_VERSIONS)
-                next = 0;
-#endif
 
-            void *dst = NULL;
-#if SINGLE_THREAD
-            dst = ps->slots[next];
+            void *dst = ps->slots[next];
             if (!dst)
             {
                 dst = mvmm_alloc_page();
@@ -683,12 +640,6 @@ static inline uintptr_t mvmm_translate_ea(mvmm_region *r,
                     return ea;
                 ps->slots[next] = dst;
             }
-#else
-            dst = mvmm_alloc_page();
-            if (!dst)
-                return ea;
-            ps->slots[next] = dst;
-#endif
 
             void *src = ps->slots[cur];
             if (!src)
@@ -698,35 +649,25 @@ static inline uintptr_t mvmm_translate_ea(mvmm_region *r,
 
             ps->slot_ts[next] = ts;
             ps->cur_slot = next;
-
-#if MVMM_DEBUG
-            MVMM_LOG("[mvmm] COW ts=%lu region=%p page=%zu slot=%u\n",
-                     (unsigned long)ts, (void *)r->base, page_idx, next);
-#endif
         }
     }
 
-    // Traduci ea verso cur_slot mantenendo l’offset dentro pagina
     uintptr_t off = ea - page_base;
-    void *curp = mvmm_cur_page_ptr(r, page_idx);
+    void *curp = mvmm_get_current_page_ptr(r, page_idx);
     if (!curp)
         return ea;
     return (uintptr_t)curp + off;
 #endif
 }
 
-/**
- * Controlla se l'accesso attraversa il confine di pagina, dato un indirizzo effettivo e una dimensione.
- */
+/* Verifica se un accesso oltrepassa il confine della pagina corrente. */
 static inline int mvmm_is_cross_page(uintptr_t ea, size_t size)
 {
     size_t off = (size_t)(ea & (MVMM_PAGE_SIZE - 1));
     return (off + size) > MVMM_PAGE_SIZE;
 }
 
-/*
- * entry point
- */
+/* Entry point imposto da MVM: intercetta ogni accesso strumentato prima dell'istruzione originale. */
 void the_patch(unsigned long mem, unsigned long regs)
 {
     instruction_record *ins = (instruction_record *)mem;
@@ -737,17 +678,14 @@ void the_patch(unsigned long mem, unsigned long regs)
     if (ins->type != 's')
         return;
 #else
-    // solo load e store
     if (ins->type != 's' && ins->type != 'l')
         return;
 #endif
 
-    // calcola effective address
-    uintptr_t ea = mvm_get_ea_u(ins, regs);
+    uintptr_t ea = mvmm_compute_effective_address(ins, regs);
     if (ea == 0)
         return;
 
-    // trova regione tra quelle tracciate
     mvmm_region *r = mvmm_find_region_cached(ea);
     if (!r)
         return;
@@ -761,38 +699,29 @@ void the_patch(unsigned long mem, unsigned long regs)
 #else
     if (sz != 0 && mvmm_is_cross_page(ea, sz))
     {
-        MVMM_LOG("[mvmm] UNSUPPORTED cross-page %c ea=%p size=%zu\n",
-                 ins->type, (void *)ea, sz);
         return;
     }
-    // calcola ea' (versione corrente)
+
     int is_store = (ins->type == 's');
     uintptr_t ea_prime = mvmm_translate_ea(r, ea, is_store);
 
-    // scrivi ea' nel registro di base di regs
     if (!mvmm_rewrite_base_reg_for_ea(ins, regs, ea, ea_prime))
         return;
 #endif
 }
 
-// non usato
+/* Buffer richiesto dall'interfaccia MVM ma non usato da questo backend. */
 #define buffer user_defined_buffer
 char buffer[1024];
 
+/* Hook richiesto da MVM per patch custom testuali: qui e' volutamente vuoto. */
 void user_defined(instruction_record *actual_instruction, patch *actual_patch)
 {
     (void)actual_instruction;
     (void)actual_patch;
 }
 
-// rollback
-
-/* Rollback della regione r al timestamp target_ts.
- * Dopo questa chiamata, le load leggono dalla versione scelta.
- * La prima store aprirà una nuova versione sopra quella.
- *
- * non libera nulla, non gestisce munmap
- */
+/* Ripristina una regione al checkpoint compatibile con il timestamp richiesto. */
 static void mvmm_region_rollback(mvmm_region *r, uint64_t target_ts)
 {
     if (!r)
@@ -812,9 +741,9 @@ static void mvmm_region_rollback(mvmm_region *r, uint64_t target_ts)
             continue;
 
         ps = &r->pages[page_idx];
-        if (ps->slots[1] == NULL)
+        if (ps->slots[MVMM_SLOT_1] == NULL)
             continue;
-        if (ps->slot_ts[1] == UINT64_MAX || ps->slot_ts[1] <= target_ts)
+        if (ps->slot_ts[MVMM_SLOT_1] == UINT64_MAX || ps->slot_ts[MVMM_SLOT_1] <= target_ts)
             continue;
 
         bitmap = mvmm_store_grid_bitmap(r, page_idx);
@@ -831,8 +760,8 @@ static void mvmm_region_rollback(mvmm_region *r, uint64_t target_ts)
             if (cell_len == 0)
                 continue;
 
-            MVMM_MEMCPY((uint8_t *)ps->slots[0] + cell_off,
-                        (uint8_t *)ps->slots[1] + cell_off,
+            MVMM_MEMCPY((uint8_t *)ps->slots[MVMM_SLOT_0] + cell_off,
+                        (uint8_t *)ps->slots[MVMM_SLOT_1] + cell_off,
                         cell_len);
         }
 
@@ -870,146 +799,73 @@ static void mvmm_region_rollback(mvmm_region *r, uint64_t target_ts)
             mvmm_page_state *ps = &r->pages[page_idx];
 
 #ifdef MMAP_MV_STORE
-            if (ps->slots[1] == NULL)
+            if (ps->slots[MVMM_SLOT_1] == NULL)
                 continue;
 
-            if (ps->slot_ts[1] == UINT64_MAX || ps->slot_ts[1] <= target_ts)
+            if (ps->slot_ts[MVMM_SLOT_1] == UINT64_MAX || ps->slot_ts[MVMM_SLOT_1] <= target_ts)
                 continue;
 
-            MVMM_MEMCPY(ps->slots[0], ps->slots[1], MVMM_PAGE_SIZE);
+            MVMM_MEMCPY(ps->slots[MVMM_SLOT_0], ps->slots[MVMM_SLOT_1], MVMM_PAGE_SIZE);
             ps->last_ts_seen = UINT64_MAX;
             continue;
 #else
             uint32_t best = UINT32_MAX;
             uint64_t best_ts = 0;
+            uint64_t slot0_ts = ps->slot_ts[MVMM_SLOT_0];
+            uint64_t slot1_ts = ps->slot_ts[MVMM_SLOT_1];
 
-            for (uint32_t s = 0; s < MVMM_MAX_VERSIONS; s++)
+            if (slot0_ts != UINT64_MAX && slot0_ts <= target_ts)
             {
-                uint64_t ts = ps->slot_ts[s];
-                if (ts == UINT64_MAX || ts > target_ts)
-                    continue;
+                best = MVMM_SLOT_0;
+                best_ts = slot0_ts;
+            }
 
-                if (best == UINT32_MAX || ts >= best_ts)
-                {
-                    best = s;
-                    best_ts = ts;
-                }
+            if (slot1_ts != UINT64_MAX && slot1_ts <= target_ts &&
+                (best == UINT32_MAX || slot1_ts >= best_ts))
+            {
+                best = MVMM_SLOT_1;
+                best_ts = slot1_ts;
             }
 
             if (best == UINT32_MAX)
                 continue;
 
-            // Pubblica la scelta
             ps->cur_slot = best;
 
-            // forza il prossimo store a fare copy on write
+            /* Costringe la prossima store ad aprire un nuovo COW sopra lo slot scelto. */
             ps->last_ts_seen = UINT64_MAX;
 
-            // Invalida tutte le versioni future.
-            for (uint32_t s = 0; s < MVMM_MAX_VERSIONS; s++)
+            if (slot0_ts != UINT64_MAX && slot0_ts > target_ts)
             {
-                uint64_t ts = ps->slot_ts[s];
-                if (ts != UINT64_MAX && ts > target_ts)
-                {
-                    ps->slot_ts[s] = UINT64_MAX;
-#if !SINGLE_THREAD
-                    ps->slots[s] = NULL;
-#endif
-                }
+                ps->slot_ts[MVMM_SLOT_0] = UINT64_MAX;
+                ps->slots[MVMM_SLOT_0] = NULL;
             }
 
-            MVMM_LOG("[mvmm] rollback page=%zu choose slot=%u best_ts=%lu\n",
-                     page_idx, best, (unsigned long)best_ts);
+            if (slot1_ts != UINT64_MAX && slot1_ts > target_ts)
+            {
+                ps->slot_ts[MVMM_SLOT_1] = UINT64_MAX;
+                ps->slots[MVMM_SLOT_1] = NULL;
+            }
 #endif
         }
     }
 #endif
 }
 
-static void mvmm_dump_state_locked(void)
-{
-    fprintf(stderr, "[mvmm] ===== DUMP STATE BEGIN =====\n");
-
-    size_t rix = 0;
-    for (mvmm_region_node *n = g_regions_head; n; n = n->next, rix++)
-    {
-        mvmm_region *r = &n->r;
-        fprintf(stderr, "[mvmm] region[%zu] base=%p len=%zu npages=%zu\n",
-                rix, (void *)r->base, r->len, r->npages);
-
-        /* Per non stampare troppo, se vuoi limita il numero di pagine */
-        for (size_t page_idx = 0; page_idx < r->npages; page_idx++)
-        {
-            mvmm_page_state *ps = &r->pages[page_idx];
-
-            uint32_t cur = ps->cur_slot;
-            uint64_t last = ps->last_ts_seen;
-
-            fprintf(stderr, "  page[%zu]: cur_slot=%u last_ts_seen=%s\n",
-                    page_idx, cur,
-                    (last == UINT64_MAX) ? "UINT64_MAX" : "set");
-
-            for (uint32_t s = 0; s < MVMM_MAX_VERSIONS; s++)
-            {
-                uint64_t ts = ps->slot_ts[s];
-                void *p = ps->slots[s];
-
-                if (ts == UINT64_MAX && p == NULL)
-                {
-                    fprintf(stderr, "    slot[%u]: EMPTY\n", s);
-                }
-                else
-                {
-                    fprintf(stderr, "    slot[%u]: ts=%s%lu ptr=%p%s\n",
-                            s,
-                            (ts == UINT64_MAX) ? "UINT64_MAX(" : "",
-                            (unsigned long)ts,
-                            p,
-                            (ts == UINT64_MAX) ? ")" : "");
-                }
-            }
-        }
-    }
-
-    fprintf(stderr, "[mvmm] ===== DUMP STATE END =====\n");
-}
-
+/* Wrapper minimale che protegge dal caso di regione nulla prima del rollback. */
 static void mvmm_rollback_region(mvmm_region *r, uint64_t target_ts)
 {
     if (!r)
         return;
 
-    /* dump prima del rollback */
-#if MVMM_DEBUG
-    fprintf(stderr, "[mvmm] rollback_region target_ts=%lu (BEFORE)\n",
-            (unsigned long)target_ts);
-    mvmm_dump_state_locked();
-#endif
-
     mvmm_region_rollback(r, target_ts);
-
-    /* dump dopo il rollback */
-#if MVMM_DEBUG
-    fprintf(stderr, "[mvmm] rollback_region target_ts=%lu (AFTER)\n",
-            (unsigned long)target_ts);
-    mvmm_dump_state_locked();
-#endif
 }
 
-/*
- * Hooks required by PARSIR speculation path.
- * Il checkpoint e' globale: finche' non finiscono tutti gli object non
- * possiamo distruggere il round precedente. Per questo set_ckpt conta solo
- * gli object flushati e l'avanzamento del round e' globale.
- */
+/* Hook PARSIR: chiude il checkpoint dell'object e avanza l'epoch globale quando tutti hanno flushato. */
 void set_ckpt(int object)
 {
     set_allocator_ckpt(object);
 
-    /*
-     * Il flush checkpointa gli object in parallelo.
-     * L'ultimo checkpoint completato chiude il round corrente e apre il successivo.
-     */
     if (__sync_add_and_fetch(&g_ckpt_counter, 1) == OBJECTS)
     {
         __atomic_store_n(&g_ckpt_counter, 0, __ATOMIC_RELEASE);
@@ -1017,11 +873,11 @@ void set_ckpt(int object)
     }
 }
 
+/* Hook PARSIR: ripristina l'object al checkpoint dell'epoch precedente. */
 void restore_object(int object)
 {
     mvmm_region *r = mvmm_find_region_for_object(object);
     uint64_t ts_now = __atomic_load_n(&g_epoch_round, __ATOMIC_ACQUIRE);
-    // Allineato a grid_ckpt: ripristina il checkpoint dell'epoch precedente.
     uint64_t target_ts = (ts_now >= 1) ? (ts_now - 1) : 0;
     restore_allocator(object);
     mvmm_rollback_region(r, target_ts);

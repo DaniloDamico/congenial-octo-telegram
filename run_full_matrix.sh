@@ -56,7 +56,6 @@ run_target() {
   local run_log="$RESULT_DIR/${target}.run.log"
   local clean_log="$RESULT_DIR/${target}.clean.log"
   local build_cmd
-  local extra_args=()
   local rc
   local mean
   local ci
@@ -78,19 +77,13 @@ run_target() {
     return
   fi
 
-  case "$target" in
-    *_mmap_mv_store_grid)
-      extra_args=(MVMM_MAX_VERSIONS=2 ROTATE_EVERY=1000 MVMM_GRID_SIZE=64)
-      ;;
-    *_mmap_mv_store|*_mmap_mv)
-      extra_args=(MVMM_MAX_VERSIONS=2 ROTATE_EVERY=1000)
-      ;;
-  esac
-
   if [[ "$mode" == "plain" ]]; then
     build_cmd=(make -C build "$target")
   else
-    build_cmd=(make -C build "$target" BENCHMARK=1 PERIOD="$PERIOD" SAMPLES="$SAMPLES" "${extra_args[@]}")
+    build_cmd=(make -C build "$target" BENCHMARK=1 PERIOD="$PERIOD" SAMPLES="$SAMPLES")
+    if [[ "$target" == *_mmap_mv_store_grid ]]; then
+      build_cmd+=(MVMM_GRID_SIZE=64)
+    fi
   fi
 
   if ! "${build_cmd[@]}" >"$build_log" 2>&1; then

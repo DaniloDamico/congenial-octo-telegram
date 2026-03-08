@@ -1,3 +1,9 @@
+#include "mvm.h"
+#include "mvm.h"
+#include "mvm.h"
+#include "mvm.h"
+#include "mvm.h"
+#include "mvm.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +26,12 @@ void add1(datatype1 **head, datatype1 *buff) {
 void dell1(datatype1 **head) {
     datatype1 *aux;
     if (*head == NULL) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
         return;
     }
     aux = *head;
@@ -33,6 +45,12 @@ void add2(datatype2 **head, datatype2 *buff) {
 void dell2(datatype2 **head) {
     datatype2 *aux;
     if (*head == NULL) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
         return;
     }
     aux = *head;
@@ -44,6 +62,12 @@ void read1(datatype1 **p) {
     char buff[SIZE1];
     int count = 0;
     while (*p && count < P) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
         memcpy((void *)buff, (void *)p, SIZE1);
         count++;
         p = (*p)->p;
@@ -53,6 +77,12 @@ void read2(datatype2 **p) {
     char buff[SIZE2];
     int count = 0;
     while (*p && count < P) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
         memcpy((void *)buff, (void *)p, SIZE2);
         count++;
         p = (*p)->p;
@@ -62,7 +92,19 @@ void read2(datatype2 **p) {
 void update1(datatype1 **p) {
     int count = 0;
     while (*p && count < P) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
         for (int i = 8; i < SIZE1; i += 8) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
             *(uint64_t *)((*p)->buff + i) = FILL_VALUE;
         }
         count++;
@@ -72,7 +114,19 @@ void update1(datatype1 **p) {
 void update2(datatype2 **p) {
     int count = 0;
     while (*p && count < P) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
         for (int i = 8; i < SIZE2; i += 8) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
             *(uint64_t *)((*p)->buff + i) = FILL_VALUE; // Now safe to overwrite
         }
         count++;
@@ -84,6 +138,12 @@ void alloc_lp_state_memory(unsigned int me) {
     state = (lp_state_type *)malloc(sizeof(lp_state_type));
 
     if (state == NULL) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
         printf("out of memory at startup\n");
         exit(EXIT_FAILURE);
     }
@@ -119,6 +179,12 @@ void ProcessEvent(unsigned int me, double now, int event_type, void *event_conte
         state->p2 = NULL;
 
         for (i = 0; i < M; i++) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
 
             // setup of the initial events
             timestamp = 0.01 * Expent(TA, s1, s2);
@@ -130,9 +196,21 @@ void ProcessEvent(unsigned int me, double now, int event_type, void *event_conte
 
         // setup of dynamic memory lists in the object state
         for (i = 0; i < CHUNKS_IN_LIST; i++) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
             add1(&(state->p1), (datatype1 *)malloc(SIZE1));
         }
         for (i = 0; i < CHUNKS_IN_LIST; i++) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
             add2(&(state->p2), (datatype2 *)malloc(SIZE2));
         }
 
@@ -142,6 +220,12 @@ void ProcessEvent(unsigned int me, double now, int event_type, void *event_conte
 
         res = (state->event_count++) % 1000;
         if (!res) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
             printf("object %d - count of events is %d\n", me, state->event_count);
         }
 
@@ -152,6 +236,12 @@ void ProcessEvent(unsigned int me, double now, int event_type, void *event_conte
         timestamp = now + Expent(TA, s1, s2);
 #ifndef SPECULATION
         if (timestamp <= now + LOOKAHEAD) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
             timestamp = now + LOOKAHEAD + Expent(TA, s1, s2);
         }
 #endif
@@ -162,13 +252,31 @@ void ProcessEvent(unsigned int me, double now, int event_type, void *event_conte
         // fflush(stdout);
 
         for (i = 0; i < REALLOCATION; i++) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
             dell1(&(state)->p1);
             dell2(&(state)->p2);
         }
         for (i = 0; i < REALLOCATION; i++) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
             add1(&(state->p1), (datatype1 *)malloc(SIZE1));
         }
         for (i = 0; i < REALLOCATION; i++) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
             add2(&(state->p2), (datatype2 *)malloc(SIZE2));
         }
 

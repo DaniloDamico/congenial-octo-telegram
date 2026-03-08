@@ -1,3 +1,6 @@
+#include "mvm.h"
+#include "mvm.h"
+#include "mvm.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,6 +19,9 @@ lp_state_type *states[OBJECTS];
 int add_car(unsigned int me, elem *head, elem *tail, elem *car, double time) {
 
     if (tail->prev == NULL) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
         printf("me is %u - null pointer for car insertion at time %e!!\n", me, time);
         exit(EXIT_FAILURE);
     }
@@ -37,6 +43,9 @@ elem *del_car(int me, elem *head, elem *tail) {
     me = me;
 
     if (head->next == tail) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
         return NULL;
     }
     car = head->next;
@@ -53,17 +62,29 @@ void traversal(unsigned int me, elem *head, elem *tail) {
     int skip = 0;
 
     if (tail->prev == head) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
         return;
     }
 
     tail = tail->prev;
 
     while (tail->prev != head) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
         if (randomized) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
             // change of the car class - not yet implemented
         }
         memcpy((char *)&(state->temp_buffer), (char *)tail->prev, sizeof(elem));
         if (!skip && tail->residence < tail->prev->residence) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
             // here we use per NUMA nodes temporary buffers
             memcpy((char *)&(state->temp_buffer), (char *)tail->prev, sizeof(elem));
             SET_MEMORY(&(tail->prev->residence), tail->residence, me);
@@ -85,6 +106,9 @@ void alloc_lp_state_memory(unsigned int me) {
     state = (lp_state_type *)malloc(sizeof(lp_state_type));
 
     if (state == NULL) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
         printf("out of memory at startup\n");
         exit(EXIT_FAILURE);
     }
@@ -109,6 +133,9 @@ void ProcessEvent(unsigned int me, double now, int event_type, void *event_conte
     size = size;
 
     if (state) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
         s1 = &(state->seed1);
         s2 = &(state->seed2);
     }
@@ -145,22 +172,34 @@ void ProcessEvent(unsigned int me, double now, int event_type, void *event_conte
 
 #ifdef UNBALANCE
         if (me < (OBJECTS >> 1)) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
             i = 0;
         } else {
             i = (INITIAL_CARS >> 1);
         }
 #endif
         for (; i < INITIAL_CARS; i++) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
 
             // setup of the initial events
             timestamp = 0.001 * Expent(TA, s1, s2);
 
             car_type_probability = Random(s1, s2);
             if (car_type_probability <= PHIGH) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
                 type = HIGH;
                 goto type_done_right;
             }
             if (car_type_probability > PHIGH && car_type_probability <= PREGULAR) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
                 type = REGULAR;
                 goto type_done_right;
             }
@@ -175,21 +214,33 @@ void ProcessEvent(unsigned int me, double now, int event_type, void *event_conte
         i = 0;
 #ifdef UNBALANCE
         if (me < (OBJECTS >> 1)) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
             i = 0;
         } else {
             i = (INITIAL_CARS >> 1);
         }
 #endif
         for (; i < INITIAL_CARS; i++) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
 
             // setup of the initial events
             timestamp = 0.001 * Expent(TA, s1, s2);
             car_type_probability = Random(s1, s2);
             if (car_type_probability <= PHIGH) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
                 type = HIGH;
                 goto type_done_left;
             }
             if (car_type_probability > PHIGH && car_type_probability <= PREGULAR) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
                 type = REGULAR;
                 goto type_done_left;
             }
@@ -208,6 +259,9 @@ void ProcessEvent(unsigned int me, double now, int event_type, void *event_conte
         type = *(enum car_type *)event_content;
         car = (elem *)malloc(sizeof(elem));
         if (!car) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
             printf("object %d - out of memory\n", me);
             fflush(stdout);
             exit(EXIT_FAILURE);
@@ -219,6 +273,9 @@ void ProcessEvent(unsigned int me, double now, int event_type, void *event_conte
         SET_MEMORY(&(state->right_load), temp, me);
 
         if (state->right_load <= _130KM_MAX_CAR_COUNT) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
             scaling = 1.0;
         } else {
             scaling = (double)_130KM_MAX_CAR_COUNT / (double)state->right_load;
@@ -227,6 +284,9 @@ void ProcessEvent(unsigned int me, double now, int event_type, void *event_conte
         timestamp = now + (1 / scaling) * Expent(TA, s1, s2);
 #ifndef SPECULATION
         if (timestamp < now + LOOKAHEAD) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
             timestamp = now + LOOKAHEAD;
         }
 #endif
@@ -239,17 +299,26 @@ void ProcessEvent(unsigned int me, double now, int event_type, void *event_conte
         dest = me + 1;
 #ifdef UNBALANCE
         if ((me < (OBJECTS >> 1)) && (dest >= (OBJECTS >> 1))) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
             // you can add whathever probability of routing the car out of the more loaded area
             dest = 0;
         } else {
             // you can add whathever probability of routing the car out of the less loaded area
             if (dest >= OBJECTS) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
                 dest = OBJECTS >> 1;
             }
         }
         ScheduleNewEvent(dest, timestamp, CAR_TRAVERSAL_RIGHT, (char *)&type, sizeof(enum car_type));
 #else
         if (dest < OBJECTS) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
             ScheduleNewEvent(dest, timestamp, CAR_TRAVERSAL_RIGHT, (char *)&type, sizeof(enum car_type));
         } else {
             dest = 0;
@@ -266,6 +335,9 @@ void ProcessEvent(unsigned int me, double now, int event_type, void *event_conte
 #ifndef MODEL_DEBUG
         car = del_car(me, &(state->right_head), &(state->right_tail));
         if (car == NULL) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
             printf("object %d - removing car from empty list!!\n", me);
             fflush(stdout);
             exit(EXIT_FAILURE);
@@ -282,6 +354,9 @@ void ProcessEvent(unsigned int me, double now, int event_type, void *event_conte
         type = *(enum car_type *)event_content;
         car = (elem *)malloc(sizeof(elem));
         if (!car) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
             printf("object %d - out of memory\n", me);
             fflush(stdout);
             exit(EXIT_FAILURE);
@@ -293,6 +368,9 @@ void ProcessEvent(unsigned int me, double now, int event_type, void *event_conte
         SET_MEMORY(&(state->left_load), temp, me);
 
         if (state->right_load <= _130KM_MAX_CAR_COUNT) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
             scaling = 1.0;
         } else {
             scaling = (double)_130KM_MAX_CAR_COUNT / (double)state->left_load;
@@ -301,6 +379,9 @@ void ProcessEvent(unsigned int me, double now, int event_type, void *event_conte
         timestamp = now + (1 / scaling) * Expent(TA, s1, s2);
 #ifndef SPECULATION
         if (timestamp < now + LOOKAHEAD) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
             timestamp = now + LOOKAHEAD;
         }
 #endif
@@ -311,6 +392,9 @@ void ProcessEvent(unsigned int me, double now, int event_type, void *event_conte
 
         temp = (int)me - 1;
         if (temp > -1) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
             dest = (unsigned int)temp;
             ScheduleNewEvent(dest, timestamp, CAR_TRAVERSAL_LEFT, (char *)&type, sizeof(enum car_type));
         } else {
@@ -326,6 +410,9 @@ void ProcessEvent(unsigned int me, double now, int event_type, void *event_conte
 
         car = del_car(me, &(state->left_head), &(state->left_tail));
         if (car == NULL) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
             printf("object %d - removing car from empty list!!\n", me);
             fflush(stdout);
             exit(EXIT_FAILURE);
@@ -347,6 +434,9 @@ void ProcessEvent(unsigned int me, double now, int event_type, void *event_conte
     SET_MEMORY(&(state->event_count), temp, me);
 
     if (!((state->event_count) % 1000)) {
+INSTRUMENT;
+INSTRUMENT;
+INSTRUMENT;
         printf("object %d - count of events is %d\n", me, state->event_count);
     }
 }

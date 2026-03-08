@@ -52,9 +52,8 @@ find . -type f -not -path './.git/*' -exec chmod +x {} +
 - SAMPLES = numero di campioni raccolti
 - phold M quanti eventi iniziali per ogni oggetto
 - pcs TA parametro della distribuzione esponenziale
+- mmap_mv = usa sempre due slot per pagina: stato corrente e checkpoint
 - mmap_mv_store = variante store-only del backend MVM_MMAP_MULTIVERSIONING
-- mmap_mv_store MVMM_MAX_VERSIONS = numero di versioni per pagina, default 2
-- mmap_mv_store ROTATE_EVERY = parametro esposto dal wrapper, default 1000
 - mmap_mv_store_grid = variante store-only con snapshot su griglia
 - mmap_mv_store_grid MVMM_GRID_SIZE = dimensione della cella di griglia, default 64
 
@@ -78,11 +77,11 @@ make -C build phold_chunk_full_ckpt BENCHMARK=1 PERIOD=5 SAMPLES=5
 ./bin/PARSIR-simulator
 
 make -C build clean
-make -C build phold_mmap_mv_store BENCHMARK=1 PERIOD=5 SAMPLES=5 MVMM_MAX_VERSIONS=2 ROTATE_EVERY=1000
+make -C build phold_mmap_mv_store BENCHMARK=1 PERIOD=5 SAMPLES=5
 ./bin/PARSIR-simulator
 
 make -C build clean
-make -C build phold_mmap_mv_store_grid BENCHMARK=1 PERIOD=5 SAMPLES=5 MVMM_MAX_VERSIONS=2 ROTATE_EVERY=1000 MVMM_GRID_SIZE=64
+make -C build phold_mmap_mv_store_grid BENCHMARK=1 PERIOD=5 SAMPLES=5 MVMM_GRID_SIZE=64
 ./bin/PARSIR-simulator
 ```
 
@@ -106,11 +105,11 @@ make -C build pcs_chunk_full_ckpt BENCHMARK=1 PERIOD=5 SAMPLES=5
 ./bin/PARSIR-simulator
 
 make -C build clean
-make -C build pcs_mmap_mv_store BENCHMARK=1 PERIOD=5 SAMPLES=5 MVMM_MAX_VERSIONS=2 ROTATE_EVERY=1000
+make -C build pcs_mmap_mv_store BENCHMARK=1 PERIOD=5 SAMPLES=5
 ./bin/PARSIR-simulator
 
 make -C build clean
-make -C build pcs_mmap_mv_store_grid BENCHMARK=1 PERIOD=5 SAMPLES=5 MVMM_MAX_VERSIONS=2 ROTATE_EVERY=1000 MVMM_GRID_SIZE=64
+make -C build pcs_mmap_mv_store_grid BENCHMARK=1 PERIOD=5 SAMPLES=5 MVMM_GRID_SIZE=64
 ./bin/PARSIR-simulator
 ```
 
@@ -134,11 +133,11 @@ make -C build highway_chunk_full_ckpt BENCHMARK=1 PERIOD=5 SAMPLES=5
 ./bin/PARSIR-simulator
 
 make -C build clean
-make -C build highway_mmap_mv_store BENCHMARK=1 PERIOD=5 SAMPLES=5 MVMM_MAX_VERSIONS=2 ROTATE_EVERY=1000
+make -C build highway_mmap_mv_store BENCHMARK=1 PERIOD=5 SAMPLES=5
 ./bin/PARSIR-simulator
 
 make -C build clean
-make -C build highway_mmap_mv_store_grid BENCHMARK=1 PERIOD=5 SAMPLES=5 MVMM_MAX_VERSIONS=2 ROTATE_EVERY=1000 MVMM_GRID_SIZE=64
+make -C build highway_mmap_mv_store_grid BENCHMARK=1 PERIOD=5 SAMPLES=5 MVMM_GRID_SIZE=64
 ./bin/PARSIR-simulator
 ```
 

@@ -12,10 +12,6 @@ TARGET_MODULES=
 #TARGET_FUNCTIONS="<a>:","<b>:" this is an example usage
 TARGET_FUNCTIONS=
 LIBS = -lpthread -lnuma -lm
-# max number of versions for each allocated subregion
-MVMM_MAX_VERSIONS ?= 2
-# number of writes to trigger a version switch
-ROTATE_EVERY ?= 1000
 
 ifneq ($(strip $(OBJECTS)),)
 OBJECTS_FLAG = -DOBJECTS=$(OBJECTS)
@@ -48,7 +44,7 @@ UDTEMPOBJ = -Duser_defined_temp_obj_file=\"$(USER_DEFINED)/$(USER_DEFINED_OBJ_FI
 SECURITY_FLAGS = -pie -fPIE -fstack-protector-all
 EXTRA_FLAGS ?=
 
-ADDITIONAL_FLAGS = -O3 -DASM_PREAMBLE -DAPPLY_PATCHES -DMVMM_MAX_VERSIONS=$(MVMM_MAX_VERSIONS) -DROTATE_EVERY=$(ROTATE_EVERY) $(EXTRA_FLAGS)
+ADDITIONAL_FLAGS = -O3 -DASM_PREAMBLE -DAPPLY_PATCHES $(EXTRA_FLAGS)
 WRAP_FLAGS = -Xlinker --wrap=main -Xlinker --wrap=mmap
 
 ifneq ($(findstring -DMMAP_MV_STORE,$(EXTRA_FLAGS)),)
