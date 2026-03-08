@@ -14,6 +14,8 @@
 #include "grid_ckpt.h"
 #elif CHUNK_BASED
 #include "chunk_ckpt.h"
+#elif MMAP_MV
+#include "mmap_mv.h"
 #endif
 
 #define STACKABLE_OBJECTS (OBJECTS)

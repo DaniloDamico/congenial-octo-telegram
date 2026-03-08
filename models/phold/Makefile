@@ -4,6 +4,9 @@ CHUNK_CKPT_FLAGS = -pie -fpie -I../../MVM_CHUNK/include -DSPECULATION
 CHUNK_FULL_CKPT_FLAGS = -DSPECULATION
 GRID_CKPT_FLAGS = -pie -fpie -I../../MVM_GRID_CKPT/include -DSPECULATION
 GRID_CKPT_BS_FLAGS = -pie -fpie -I../../MVM_GRID_CKPT_BS/include -DSPECULATION
+MMAP_MV_FLAGS = -pie -fpie -I../../MVM_MMAP_MULTIVERSIONING/include -DSPECULATION -DMMAP_MV
+MMAP_MV_STORE_FLAGS = $(MMAP_MV_FLAGS) -DMMAP_MV_STORE
+MMAP_MV_STORE_GRID_FLAGS = $(MMAP_MV_STORE_FLAGS) -DMMAP_MV_STORE_GRID
 TARGET = intermediate-phold.o 
 
 SRCS = application.c 
@@ -38,6 +41,14 @@ grid_ckpt:
 
 grid_ckpt_bs:
 	$(CC) $(SRCS) $(CFLAGS) $(GRID_CKPT_BS_FLAGS) $(OBJ_FLAG) $(M_FLAG) -o $(TARGET)
+	ld -r $(TARGET) --wrap=malloc --wrap=free -o phold.o
+
+mmap_mv_store:
+	$(CC) $(SRCS) $(CFLAGS) $(MMAP_MV_STORE_FLAGS) $(OBJ_FLAG) $(M_FLAG) -o $(TARGET)
+	ld -r $(TARGET) --wrap=malloc --wrap=free -o phold.o
+
+mmap_mv_store_grid:
+	$(CC) $(SRCS) $(CFLAGS) $(MMAP_MV_STORE_GRID_FLAGS) $(OBJ_FLAG) $(M_FLAG) -o $(TARGET)
 	ld -r $(TARGET) --wrap=malloc --wrap=free -o phold.o
 
 clean:
