@@ -19,7 +19,16 @@ PERIOD=5
 SAMPLES=30
 
 ifeq ($(BENCHMARK),1)
-BENCH_OPT := -DBENCHMARKING -DTHREADS=$(THREADS) -DLOOKAHEAD=$(LOOKAHEAD) -DOBJECTS=$(OBJECTS) -DPERIOD=$(PERIOD) -DSAMPLES=$(SAMPLES) -lm
+BENCH_OPT := -DBENCHMARKING -DPERIOD=$(PERIOD) -DSAMPLES=$(SAMPLES) -lm
+ifneq ($(strip $(THREADS)),)
+BENCH_OPT += -DTHREADS=$(THREADS)
+endif
+ifneq ($(strip $(LOOKAHEAD)),)
+BENCH_OPT += -DLOOKAHEAD=$(LOOKAHEAD)
+endif
+ifneq ($(strip $(OBJECTS)),)
+BENCH_OPT += -DOBJECTS=$(OBJECTS)
+endif
 else
 BENCH_OPT :=
 endif
@@ -190,6 +199,11 @@ pcs_chunk_full_ckpt: runtime_chunk_full_ckpt
 	@if [ ! -d ../bin ]; then mkdir -p ../bin; fi
 	cd ../models/pcs ; make chunk_full_ckpt OBJECTS=$(OBJECTS) TA=$(TA)
 	gcc -o ../bin/PARSIR-simulator ../lib/PARSIR-runtime.o -I../include -lpthread -lnuma ../models/pcs/pcs.o -lm
+
+highway_chunk_full_ckpt: runtime_chunk_full_ckpt
+	@if [ ! -d ../bin ]; then mkdir -p ../bin; fi
+	cd ../models/highway ; make chunk_full_ckpt
+	gcc -g -o ../bin/PARSIR-simulator ../lib/PARSIR-runtime.o -I../include -lpthread -lnuma ../models/highway/highway.o -lm
 
 clean:
 	find .. -name "*.o" -type f -delete ; rm -f ../bin/PARSIR-simulator ; cd ../MVM_GRID_CKPT ; make clean ; cd ../MVM_GRID_CKPT_BS ; make clean ; cd ../MVM_CHUNK ; make clean

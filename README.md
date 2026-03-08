@@ -26,7 +26,7 @@ will be available in the bin directory and can be simply launched
 The include directory contains the file run.h which determines how many simulation objects will
 belong to the model as well as how many threads will be started up by the PARSIR-simulator, 
 and the lookahead of the simulation model to be executed. Currently they are specified as:
-#define THREADS (10) 
+#define THREADS (8) 
 #define OBJECTS (1024) 
 #define LOOKAHEAD (1.0)
 
@@ -44,3 +44,73 @@ To use PARSIR-GRID_CKPT you can simply go to the build directory to compile runt
 # rendi tutti i file eseguibili
 
 find . -type f -not -path './.git/*' -exec chmod +x {} +
+
+# Configurazioni
+
+- BENCHMARK=1 = attiva il benchmark
+- PERIOD=1 = ogni campione dura 1 secondo
+- SAMPLES=1 = raccogli un solo campione
+- phold M quanti eventi iniziali per ogni oggetto
+- pcs TA parametro della distribuzione esponenziale
+
+## PHOLD
+
+```bash
+make -C build clean
+make -C build phold_grid_ckpt BENCHMARK=1 PERIOD=5 SAMPLES=5
+./bin/PARSIR-simulator
+
+make -C build clean
+make -C build phold_grid_ckpt_bs BENCHMARK=1 PERIOD=5 SAMPLES=5
+./bin/PARSIR-simulator
+
+make -C build clean
+make -C build phold_chunk_ckpt BENCHMARK=1 PERIOD=5 SAMPLES=5
+./bin/PARSIR-simulator
+
+make -C build clean
+make -C build phold_chunk_full_ckpt BENCHMARK=1 PERIOD=5 SAMPLES=5
+./bin/PARSIR-simulator
+```
+
+## PCS
+
+```bash
+make -C build clean
+make -C build pcs_grid_ckpt BENCHMARK=1 PERIOD=5 SAMPLES=5
+./bin/PARSIR-simulator
+
+make -C build clean
+make -C build pcs_grid_ckpt_bs BENCHMARK=1 PERIOD=5 SAMPLES=5
+./bin/PARSIR-simulator
+
+make -C build clean
+make -C build pcs_chunk_ckpt BENCHMARK=1 PERIOD=5 SAMPLES=5
+./bin/PARSIR-simulator
+
+make -C build clean
+make -C build pcs_chunk_full_ckpt BENCHMARK=1 PERIOD=5 SAMPLES=5
+./bin/PARSIR-simulator
+```
+
+## HIGHWAY
+
+```bash
+make -C build clean
+make -C build highway_grid_ckpt BENCHMARK=1 PERIOD=5 SAMPLES=5
+./bin/PARSIR-simulator
+
+make -C build clean
+make -C build highway_grid_ckpt_bs BENCHMARK=1 PERIOD=5 SAMPLES=5
+./bin/PARSIR-simulator
+
+make -C build clean
+make -C build highway_chunk_ckpt BENCHMARK=1 PERIOD=5 SAMPLES=5
+./bin/PARSIR-simulator
+
+make -C build clean
+make -C build highway_chunk_full_ckpt BENCHMARK=1 PERIOD=5 SAMPLES=5
+./bin/PARSIR-simulator
+```
+
+./run_selected_benchmarks.sh

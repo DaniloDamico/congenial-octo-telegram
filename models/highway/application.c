@@ -350,3 +350,11 @@ void ProcessEvent(unsigned int me, double now, int event_type, void *event_conte
         printf("object %d - count of events is %d\n", me, state->event_count);
     }
 }
+
+uint32_t *get_seed1_ptr(unsigned int me) {
+    return &(state->seed1);
+}
+
+uint32_t *get_seed2_ptr(unsigned int me) {
+    return &(state->seed2);
+}
