@@ -43,6 +43,7 @@ typedef struct _parsed_instruction {
 	char control_flow;
 	int displacement_size;
 	uint64_t target_address;
+	char text[BLOCK];
 } parsed_instruction;
 
 typedef struct _direct_branch_ref {
@@ -243,6 +244,9 @@ static int parse_disassembly_instruction(const char *line, parsed_instruction *o
 		return 0;
 	}
 
+	strncpy(out->text, decoded_instruction, sizeof(out->text) - 1);
+	out->text[sizeof(out->text) - 1] = '\0';
+
 	out->address = strtoull(address_token, NULL, 16) + asl_randomization;
 	out->size = (unsigned long)count_instruction_bytes(encoded_bytes);
 	if (out->size == 0){
@@ -382,6 +386,129 @@ static int configure_short_jump_fallback(instruction_record *record){
 	return 1;
 }
 
+static int serious_detour_enabled(void){
+
+#ifdef MMAP_MV_STORE
+	return 0;
+#else
+	return 1;
+#endif
+}
+
+static int instruction_references_register_alias(const char *text, int reg_index){
+
+	static const char *aliases[][6] = {
+		{NULL, NULL, NULL, NULL, NULL, NULL},
+		{"%r15", "%r15d", "%r15w", "%r15b", NULL, NULL},
+		{"%r14", "%r14d", "%r14w", "%r14b", NULL, NULL},
+		{"%r13", "%r13d", "%r13w", "%r13b", NULL, NULL},
+		{"%r12", "%r12d", "%r12w", "%r12b", NULL, NULL},
+		{"%rbp", "%ebp", "%bp", "%bpl", NULL, NULL},
+		{"%rbx", "%ebx", "%bx", "%bl", NULL, NULL},
+		{"%r11", "%r11d", "%r11w", "%r11b", NULL, NULL},
+		{"%r10", "%r10d", "%r10w", "%r10b", NULL, NULL},
+		{"%r9", "%r9d", "%r9w", "%r9b", NULL, NULL},
+		{"%r8", "%r8d", "%r8w", "%r8b", NULL, NULL},
+		{"%rax", "%eax", "%ax", "%al", NULL, NULL},
+		{"%rcx", "%ecx", "%cx", "%cl", NULL, NULL},
+		{"%rdx", "%edx", "%dx", "%dl", NULL, NULL},
+		{"%rsi", "%esi", "%si", "%sil", NULL, NULL},
+		{"%rdi", "%edi", "%di", "%dil", NULL, NULL}
+	};
+	int i;
+
+	if (text == NULL || reg_index <= 0 || reg_index >= (int)(sizeof(aliases) / sizeof(aliases[0]))){
+		return 0;
+	}
+
+	for (i = 0; aliases[reg_index][i] != NULL; i++){
+		if (strstr(text, aliases[reg_index][i]) != NULL){
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+static int instruction_overwrites_register_without_reading_it(const char *text, int reg_index){
+
+	char local_text[BLOCK];
+	char *saveptr = NULL;
+	char *op;
+	char *operands;
+	char *operand_saveptr = NULL;
+	char *source;
+	char *dest;
+
+	if (text == NULL){
+		return 0;
+	}
+
+	strncpy(local_text, text, sizeof(local_text) - 1);
+	local_text[sizeof(local_text) - 1] = '\0';
+
+	op = strtok_r(local_text, " \t", &saveptr);
+	if (op == NULL){
+		return 0;
+	}
+
+	operands = skip_spaces(saveptr);
+	if (operands == NULL || operands[0] == '\0'){
+		return 0;
+	}
+
+	source = strtok_r(operands, ",", &operand_saveptr);
+	dest = strtok_r(NULL, ",", &operand_saveptr);
+	source = skip_spaces(source);
+	dest = skip_spaces(dest);
+
+	if (dest == NULL || dest[0] == '\0'){
+		return 0;
+	}
+
+	if (strncmp(op, "mov", 3) != 0 && strcmp(op, "lea") != 0){
+		return 0;
+	}
+
+	if (!instruction_references_register_alias(dest, reg_index)){
+		return 0;
+	}
+
+	if (instruction_references_register_alias(source, reg_index)){
+		return 0;
+	}
+
+	return 1;
+}
+
+static int store_mode_can_use_serious_detour(const instruction_record *record, int parsed_index, int stolen_instruction_count){
+
+	int j;
+
+	if (record == NULL){
+		return 0;
+	}
+
+	if (record->target.base_index <= 0){
+		return 0;
+	}
+
+	for (j = 1; j < stolen_instruction_count; j++){
+		const parsed_instruction *parsed;
+
+		if ((parsed_index + j) >= parsed_instructions_count){
+			return 0;
+		}
+		parsed = &parsed_instructions[parsed_index + j];
+		if (instruction_references_register_alias(parsed->text, record->target.base_index) &&
+			!instruction_overwrites_register_without_reading_it(parsed->text, record->target.base_index)){
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
 static void finalize_detours(void){
 
 	int i;
@@ -399,19 +526,25 @@ static void finalize_detours(void){
 		instructions[i].detour_size = instructions[i].size;
 		instructions[i].stolen_instruction_count = 0;
 
-		if (instructions[i].size >= 5){
-			instructions[i].stolen_instruction_count = 1;
-			instructions[i].stolen[0].address = instructions[i].address;
+			if (instructions[i].size >= 5){
+				instructions[i].stolen_instruction_count = 1;
+				instructions[i].stolen[0].address = instructions[i].address;
 			instructions[i].stolen[0].size = instructions[i].size;
 			instructions[i].stolen[0].pc_relative = 'n';
 			instructions[i].stolen[0].control_flow = 'n';
 			instructions[i].stolen[0].displacement_size = 0;
 			instructions[i].stolen[0].target_address = 0x0;
-			continue;
-		}
+				continue;
+			}
 
-		if (parsed_index < 0 || parsed_index >= parsed_instructions_count){
-			fallback_reason = "missing parsed instruction metadata";
+			if (!serious_detour_enabled()){
+				if (configure_short_jump_fallback(&instructions[i])){
+					continue;
+				}
+			}
+
+			if (parsed_index < 0 || parsed_index >= parsed_instructions_count){
+				fallback_reason = "missing parsed instruction metadata";
 			goto fallback;
 		}
 
@@ -456,7 +589,7 @@ static void finalize_detours(void){
 			instructions[i].stolen_instruction_count++;
 		}
 
-		for (j = 0; j < instructions[i].stolen_instruction_count; j++){
+			for (j = 0; j < instructions[i].stolen_instruction_count; j++){
 			uint64_t target_address = instructions[i].stolen[j].target_address;
 			int displacement_size = instructions[i].stolen[j].displacement_size;
 
@@ -478,9 +611,16 @@ static void finalize_detours(void){
 				fallback_detail = instructions[i].stolen[j].address;
 				goto fallback;
 			}
-		}
+			}
 
-		if (has_external_direct_branch_target(detour_start, detour_start + detour_size)){
+			if (!serious_detour_enabled() &&
+				!store_mode_can_use_serious_detour(&instructions[i], parsed_index, instructions[i].stolen_instruction_count)){
+				fallback_reason = "store-only detour would expose the rewritten base register to extra instructions";
+				fallback_detail = instructions[i].address;
+				goto fallback;
+			}
+
+			if (has_external_direct_branch_target(detour_start, detour_start + detour_size)){
 			fallback_reason = "a direct branch targets bytes inside the stolen block";
 			fallback_detail = detour_start;
 			goto fallback;
@@ -490,10 +630,10 @@ static void finalize_detours(void){
 		continue;
 
 fallback:
-		if (configure_short_jump_fallback(&instructions[i])){
-			continue;
-		}
-		fail_unsupported_detour(&instructions[i], fallback_reason, fallback_detail);
+			if (serious_detour_enabled() && configure_short_jump_fallback(&instructions[i])){
+				continue;
+			}
+			fail_unsupported_detour(&instructions[i], fallback_reason, fallback_detail);
 	}
 }
 

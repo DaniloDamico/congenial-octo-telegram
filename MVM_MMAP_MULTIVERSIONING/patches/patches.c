@@ -976,6 +976,9 @@ static void mvmm_dump_state_locked(void)
 
 static void mvmm_rollback_region(mvmm_region *r, uint64_t target_ts)
 {
+    if (!r)
+        return;
+
     /* dump prima del rollback */
 #if MVMM_DEBUG
     fprintf(stderr, "[mvmm] rollback_region target_ts=%lu (BEFORE)\n",

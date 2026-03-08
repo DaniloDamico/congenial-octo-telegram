@@ -23,6 +23,7 @@
 #ifdef SPECULATION
 void speculation_queue_flush(void);
 void retractable_queue_flush(void);
+static void retractable_queue_insert_locked(queue_elem *, int);
 #ifdef DEBUG
 void verify_empty_queues(void);
 void verify_empty_speculation_queues(void);
@@ -615,7 +616,10 @@ redo:
     }
 #endif
     speculation[target].current_time = elem->timestamp;
+    retractable_queue_insert_locked(elem, target);
     object_unlock(target);
+    __sync_fetch_and_add(&retractable_events, 1);
+    __sync_fetch_and_add(&pending_events, 1);
 #endif
 
 #ifndef SPECULATION
@@ -626,6 +630,13 @@ redo:
 }
 
 #ifdef SPECULATION
+
+static void retractable_queue_insert_locked(queue_elem *elem, int dest) {
+    elem->prev = retractable_queue[dest].tail.prev;
+    elem->next = &retractable_queue[dest].tail;
+    retractable_queue[dest].tail.prev->next = elem;
+    retractable_queue[dest].tail.prev = elem;
+}
 
 void log_the_send(queue_elem *the_elem, int current_object, double current_time) {
     send_log *queue = &log_queue[current_object];
@@ -846,11 +857,7 @@ flush_another:
 // this function is used to put into the per-object retractable queue an event that has been processed in the current
 // epoch
 void retractable_queue_insert(queue_elem *elem) {
-    queue_elem *current;
-    queue_elem *tail;
-    int index;
     int dest;
-    int source;
 
     dest = elem->destination;
 
@@ -879,10 +886,7 @@ void retractable_queue_insert(queue_elem *elem) {
     }
     object_lock(dest);
     // here we make a tail insert
-    elem->prev = retractable_queue[dest].tail.prev;
-    elem->next = &retractable_queue[dest].tail;
-    retractable_queue[dest].tail.prev->next = elem;
-    retractable_queue[dest].tail.prev = elem;
+    retractable_queue_insert_locked(elem, dest);
 #ifdef DEBUG
     verify_retractable_queue_order(dest);
 #endif

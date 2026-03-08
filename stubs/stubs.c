@@ -120,9 +120,7 @@ int GetEvent(int *destination, double *timestamp, int *event_type, char *body, i
 
     memcpy(body, e->payload, e->event_size);
 
-#ifdef SPECULATION
-    retractable_queue_insert(q);
-#else
+#ifndef SPECULATION
     free(e);
 #endif
 
