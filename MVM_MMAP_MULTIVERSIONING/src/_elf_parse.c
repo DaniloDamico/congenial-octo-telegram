@@ -7,6 +7,8 @@
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <stdint.h>
+#include <limits.h>
+#include <ctype.h>
 
 #include "head.h"
 #include "elf_parse.h"
@@ -33,6 +35,28 @@ patch *patches;//pointer to the memory block where the patch is built
 uint64_t intermediate_zones[SIZE];
 uint64_t intermediate_flags[SIZE];
 int intermediate_zones_index = -1;
+
+typedef struct _parsed_instruction {
+	uint64_t address;
+	unsigned long size;
+	char pc_relative;
+	char control_flow;
+	int displacement_size;
+	uint64_t target_address;
+} parsed_instruction;
+
+typedef struct _direct_branch_ref {
+	uint64_t source_address;
+	uint64_t target_address;
+} direct_branch_ref;
+
+#define MAX_PARSED_INSTRUCTIONS 65536
+
+static parsed_instruction parsed_instructions[MAX_PARSED_INSTRUCTIONS];
+static int parsed_instructions_count = 0;
+
+static direct_branch_ref direct_branch_refs[MAX_PARSED_INSTRUCTIONS];
+static int direct_branch_refs_count = 0;
 
 void audit_block(instruction_record *the_record){
 	printf("instruction record:\n \
@@ -101,19 +125,440 @@ uint64_t book_intermediate_target(uint64_t instruction_address, unsigned long in
 	return 0x0;
 }
 
+static inline char *skip_spaces(char *s){
+	if (s == NULL){
+		return "";
+	}
+	while (*s && isspace((unsigned char)*s)){
+		s++;
+	}
+	return s;
+}
+
+static int count_instruction_bytes(const char *encoded){
+
+	int digits = 0;
+	int i;
+
+	for (i = 0; encoded[i] != '\0'; i++){
+		if (isxdigit((unsigned char)encoded[i])){
+			digits++;
+		}
+	}
+
+	return digits >> 1;
+}
+
+static int is_control_flow_mnemonic(const char *op){
+
+	if (op == NULL || op[0] == '\0'){
+		return 0;
+	}
+
+	if (op[0] == 'j'){
+		return 1;
+	}
+
+	if (!strcmp(op, "call") || !strcmp(op, "callq") ||
+		!strcmp(op, "loop") || !strcmp(op, "loope") ||
+		!strcmp(op, "loopne") || !strcmp(op, "loopnz") ||
+		!strcmp(op, "loopz") || !strcmp(op, "ret") ||
+		!strcmp(op, "retq")){
+		return 1;
+	}
+
+	return 0;
+}
+
+static int parse_absolute_runtime_address(const char *text, uint64_t *target_address){
+
+	char token[BLOCK];
+	int i = 0;
+
+	if (text == NULL || target_address == NULL){
+		return 0;
+	}
+
+	while (*text && isspace((unsigned char)*text)){
+		text++;
+	}
+
+	if (*text == '*'){
+		return 0;
+	}
+
+	while (*text && (isxdigit((unsigned char)*text) || *text == 'x' || *text == 'X') && i < (BLOCK - 1)){
+		token[i++] = *text++;
+	}
+	token[i] = '\0';
+
+	if (i == 0){
+		return 0;
+	}
+
+	*target_address = strtoull(token, NULL, 16) + asl_randomization;
+	return 1;
+}
+
+static int parse_comment_runtime_address(const char *line, uint64_t *target_address){
+
+	const char *comment = strchr(line, '#');
+
+	if (comment == NULL){
+		return 0;
+	}
+
+	return parse_absolute_runtime_address(comment + 1, target_address);
+}
+
+static int parse_disassembly_instruction(const char *line, parsed_instruction *out){
+
+	char local_line[LINE_SIZE];
+	char *address_token;
+	char *encoded_bytes;
+	char *decoded_instruction;
+	char *saveptr = NULL;
+	char *op;
+	uint64_t target_address = 0;
+
+	if (line == NULL || out == NULL){
+		return 0;
+	}
+
+	strncpy(local_line, line, sizeof(local_line) - 1);
+	local_line[sizeof(local_line) - 1] = '\0';
+
+	address_token = strtok_r(local_line, ":\t", &saveptr);
+	encoded_bytes = strtok_r(NULL, "\t", &saveptr);
+	decoded_instruction = strtok_r(NULL, "\t", &saveptr);
+
+	if (address_token == NULL || encoded_bytes == NULL || decoded_instruction == NULL){
+		return 0;
+	}
+
+	address_token = skip_spaces(address_token);
+	decoded_instruction = skip_spaces(decoded_instruction);
+
+	if (address_token[0] == '\0' || decoded_instruction[0] == '\0'){
+		return 0;
+	}
+
+	out->address = strtoull(address_token, NULL, 16) + asl_randomization;
+	out->size = (unsigned long)count_instruction_bytes(encoded_bytes);
+	if (out->size == 0){
+		return 0;
+	}
+
+	out->pc_relative = 'n';
+	out->control_flow = 'n';
+	out->displacement_size = 0;
+	out->target_address = 0x0;
+
+	op = strtok_r(decoded_instruction, " \t", &saveptr);
+	if (op == NULL){
+		return 0;
+	}
+
+	if (strstr(line, "(%rip)") != NULL){
+		out->pc_relative = 'y';
+		out->displacement_size = 4;
+		if (!parse_comment_runtime_address(line, &out->target_address)){
+			printf("%s: failed to resolve RIP-relative target in line '%s'\n", VM_NAME, line);
+			fflush(stdout);
+			exit(EXIT_FAILURE);
+		}
+	}
+
+	if (is_control_flow_mnemonic(op)){
+		out->control_flow = 'y';
+		if (!strcmp(op, "ret") || !strcmp(op, "retq")){
+			out->pc_relative = 'n';
+			out->displacement_size = 0;
+			return 1;
+		}
+
+		if (parse_absolute_runtime_address(skip_spaces(saveptr), &target_address)){
+			out->pc_relative = 'y';
+			out->target_address = target_address;
+			if (out->size == 2){
+				out->displacement_size = 1;
+			}
+			else{
+				out->displacement_size = 4;
+			}
+		}
+	}
+
+	return 1;
+}
+
+static void register_parsed_instruction(const parsed_instruction *instruction){
+
+	if (parsed_instructions_count >= MAX_PARSED_INSTRUCTIONS){
+		printf("%s: too many parsed instructions (max %d)\n", VM_NAME, MAX_PARSED_INSTRUCTIONS);
+		fflush(stdout);
+		exit(EXIT_FAILURE);
+	}
+
+	parsed_instructions[parsed_instructions_count++] = *instruction;
+
+	if (instruction->control_flow == 'y' && instruction->target_address != 0x0){
+		if (direct_branch_refs_count >= MAX_PARSED_INSTRUCTIONS){
+			printf("%s: too many branch references (max %d)\n", VM_NAME, MAX_PARSED_INSTRUCTIONS);
+			fflush(stdout);
+			exit(EXIT_FAILURE);
+		}
+		direct_branch_refs[direct_branch_refs_count].source_address = instruction->address;
+		direct_branch_refs[direct_branch_refs_count].target_address = instruction->target_address;
+		direct_branch_refs_count++;
+	}
+}
+
+static int target_record_index_for_address(uint64_t address, int exclude_record){
+
+	int i;
+
+	for (i = 0; i < target_instructions; i++){
+		if (i == exclude_record){
+			continue;
+		}
+		if (instructions[i].address == address){
+			return i;
+		}
+	}
+
+	return -1;
+}
+
+static int has_external_direct_branch_target(uint64_t range_start, uint64_t range_end){
+
+	int i;
+
+	for (i = 0; i < direct_branch_refs_count; i++){
+		if (direct_branch_refs[i].target_address <= range_start ||
+			direct_branch_refs[i].target_address >= range_end){
+			continue;
+		}
+
+		if (direct_branch_refs[i].source_address < range_start ||
+			direct_branch_refs[i].source_address >= range_end){
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+static void fail_unsupported_detour(const instruction_record *record, const char *reason, uint64_t detail_address){
+
+	printf("%s: cannot build a detour for %s at %p (%s, detail=%p)\n",
+		VM_NAME,
+		record->function,
+		(void*)record->address,
+		reason,
+		(void*)detail_address);
+	fflush(stdout);
+	exit(EXIT_FAILURE);
+}
+
+static int configure_short_jump_fallback(instruction_record *record){
+
+	uint64_t intermediate_target = book_intermediate_target(record->address, record->size);
+
+	if (intermediate_target == 0x0){
+		return 0;
+	}
+
+	record->indirect_jump = 'y';
+	record->middle_buffer = intermediate_target;
+	record->detour_size = record->size;
+	record->stolen_instruction_count = 1;
+	record->stolen[0].address = record->address;
+	record->stolen[0].size = record->size;
+	record->stolen[0].pc_relative = 'n';
+	record->stolen[0].control_flow = 'n';
+	record->stolen[0].displacement_size = 0;
+	record->stolen[0].target_address = 0x0;
+	return 1;
+}
+
+static void finalize_detours(void){
+
+	int i;
+	int j;
+
+	for (i = 0; i < target_instructions; i++){
+		unsigned long detour_size = 0;
+		uint64_t detour_start = instructions[i].address;
+		int parsed_index = instructions[i].parsed_index;
+		const char *fallback_reason = NULL;
+		uint64_t fallback_detail = 0x0;
+
+		instructions[i].indirect_jump = 'n';
+		instructions[i].middle_buffer = 0x0;
+		instructions[i].detour_size = instructions[i].size;
+		instructions[i].stolen_instruction_count = 0;
+
+		if (instructions[i].size >= 5){
+			instructions[i].stolen_instruction_count = 1;
+			instructions[i].stolen[0].address = instructions[i].address;
+			instructions[i].stolen[0].size = instructions[i].size;
+			instructions[i].stolen[0].pc_relative = 'n';
+			instructions[i].stolen[0].control_flow = 'n';
+			instructions[i].stolen[0].displacement_size = 0;
+			instructions[i].stolen[0].target_address = 0x0;
+			continue;
+		}
+
+		if (parsed_index < 0 || parsed_index >= parsed_instructions_count){
+			fallback_reason = "missing parsed instruction metadata";
+			goto fallback;
+		}
+
+		while (detour_size < 5){
+			parsed_instruction *parsed;
+			int stolen_index = instructions[i].stolen_instruction_count;
+
+			if ((parsed_index + stolen_index) >= parsed_instructions_count){
+				fallback_reason = "detour runs beyond parsed instruction stream";
+				goto fallback;
+			}
+			if (stolen_index >= MAX_STOLEN_INSTRUCTIONS){
+				fallback_reason = "too many stolen instructions";
+				goto fallback;
+			}
+
+			parsed = &parsed_instructions[parsed_index + stolen_index];
+			if (parsed->address != (detour_start + detour_size)){
+				fallback_reason = "non-contiguous stolen bytes";
+				fallback_detail = parsed->address;
+				goto fallback;
+			}
+			if ((detour_size + parsed->size) > MAX_STOLEN_BYTES){
+				fallback_reason = "detour exceeds byte budget";
+				fallback_detail = parsed->address;
+				goto fallback;
+			}
+			if (stolen_index > 0 && target_record_index_for_address(parsed->address, i) >= 0){
+				fallback_reason = "detour would swallow another instrumented access";
+				fallback_detail = parsed->address;
+				goto fallback;
+			}
+
+			instructions[i].stolen[stolen_index].address = parsed->address;
+			instructions[i].stolen[stolen_index].size = parsed->size;
+			instructions[i].stolen[stolen_index].pc_relative = parsed->pc_relative;
+			instructions[i].stolen[stolen_index].control_flow = parsed->control_flow;
+			instructions[i].stolen[stolen_index].displacement_size = parsed->displacement_size;
+			instructions[i].stolen[stolen_index].target_address = parsed->target_address;
+
+			detour_size += parsed->size;
+			instructions[i].stolen_instruction_count++;
+		}
+
+		for (j = 0; j < instructions[i].stolen_instruction_count; j++){
+			uint64_t target_address = instructions[i].stolen[j].target_address;
+			int displacement_size = instructions[i].stolen[j].displacement_size;
+
+			if (instructions[i].stolen[j].control_flow == 'y' && displacement_size == 0){
+				fallback_reason = "control-flow instruction without relocatable displacement";
+				fallback_detail = instructions[i].stolen[j].address;
+				goto fallback;
+			}
+
+			if (instructions[i].stolen[j].pc_relative == 'y' && displacement_size != 1 && displacement_size != 4){
+				fallback_reason = "unsupported pc-relative displacement size";
+				fallback_detail = instructions[i].stolen[j].address;
+				goto fallback;
+			}
+
+			if (instructions[i].stolen[j].control_flow == 'y' && displacement_size == 1 &&
+				(target_address < detour_start || target_address >= (detour_start + detour_size))){
+				fallback_reason = "short branch escapes the stolen block";
+				fallback_detail = instructions[i].stolen[j].address;
+				goto fallback;
+			}
+		}
+
+		if (has_external_direct_branch_target(detour_start, detour_start + detour_size)){
+			fallback_reason = "a direct branch targets bytes inside the stolen block";
+			fallback_detail = detour_start;
+			goto fallback;
+		}
+
+		instructions[i].detour_size = detour_size;
+		continue;
+
+fallback:
+		if (configure_short_jump_fallback(&instructions[i])){
+			continue;
+		}
+		fail_unsupported_detour(&instructions[i], fallback_reason, fallback_detail);
+	}
+}
+
+static void relocate_stolen_bytes(instruction_record *record, patch *actual_patch, unsigned long detour_size){
+
+	unsigned long copied_offset = 0;
+	int i;
+
+	(void)detour_size;
+
+	for (i = 0; i < record->stolen_instruction_count; i++){
+		char *copied_instruction;
+		uint64_t target_address;
+		int64_t new_displacement;
+		unsigned char *displacement_ptr;
+
+		copied_instruction = actual_patch->code + copied_offset;
+		target_address = record->stolen[i].target_address;
+
+		if (record->stolen[i].pc_relative != 'y'){
+			copied_offset += record->stolen[i].size;
+			continue;
+		}
+
+		if (target_address >= record->address && target_address < (record->address + record->detour_size)){
+			target_address = (uint64_t)(actual_patch->code + (target_address - record->address));
+		}
+
+		new_displacement = (int64_t)target_address - (int64_t)((uint64_t)copied_instruction + record->stolen[i].size);
+		displacement_ptr = (unsigned char *)(copied_instruction + record->stolen[i].size - record->stolen[i].displacement_size);
+
+		if (record->stolen[i].displacement_size == 4){
+			if (new_displacement < INT32_MIN || new_displacement > INT32_MAX){
+				fail_unsupported_detour(record, "pc-relative target is out of rel32 range", record->stolen[i].address);
+			}
+			displacement_ptr[0] = (unsigned char)(new_displacement & 0xff);
+			displacement_ptr[1] = (unsigned char)((new_displacement >> 8) & 0xff);
+			displacement_ptr[2] = (unsigned char)((new_displacement >> 16) & 0xff);
+			displacement_ptr[3] = (unsigned char)((new_displacement >> 24) & 0xff);
+		}
+		else if (record->stolen[i].displacement_size == 1){
+			if (new_displacement < INT8_MIN || new_displacement > INT8_MAX){
+				fail_unsupported_detour(record, "pc-relative target is out of rel8 range", record->stolen[i].address);
+			}
+			displacement_ptr[0] = (unsigned char)(new_displacement & 0xff);
+		}
+		else{
+			fail_unsupported_detour(record, "unsupported pc-relative displacement width", record->stolen[i].address);
+		}
+
+		copied_offset += record->stolen[i].size;
+	}
+}
+
 void build_patches(void){
 
 	int i;
 	unsigned long size;
+	unsigned long detour_size;
 	uint64_t instruction_address;
 	int jmp_displacement;
 	char *jmp_target;
 	char v[128];//this hosts the jmp binary
 	int jmp_back_displacement;
-	uint64_t patch_address;
 	int pos;
-	uint64_t effective_operand_address;
-	uint64_t effective_operand_displacement;
 	uint64_t intermediate_target;
 
 	uint64_t test_code = (uint64_t)the_patch_assembly;
@@ -128,10 +573,14 @@ void build_patches(void){
 		instruction_address = patches[i].original_instruction_address = instructions[i].address;
 
 		//saving original instruction size
-		size = patches[i].original_instruction_size = instructions[i].size;
+		size = instructions[i].size;
+		detour_size = patches[i].original_instruction_size = instructions[i].detour_size;
+		if (detour_size < 5 && instructions[i].indirect_jump != 'y'){
+			fail_unsupported_detour(&instructions[i], "detour smaller than a rel32 jump", instruction_address);
+		}
 
 		//saving the original instruction bytes
-		memcpy((char*)(patches[i].original_instruction_bytes),(char*)(instructions[i].address),size); 
+		memcpy((char*)(patches[i].original_instruction_bytes),(char*)(instructions[i].address),detour_size); 
 
 		patches[i].code = patches[i].block;//you can put wathever instruction in the block of the patch
 
@@ -166,8 +615,9 @@ void build_patches(void){
 		memcpy((char*)(patches[i].code) + 37,v,8);
 		patches[i].code = patches[i].code + test_code_size;
 #endif
-		//copy the original memory access instruction to be executed
-		memcpy((char*)(patches[i].code),(char*)(instructions[i].address),size); 
+		//copy the original bytes stolen from the target site
+		memcpy((char*)(patches[i].code),(char*)(instructions[i].address),detour_size);
+		relocate_stolen_bytes(&instructions[i], &patches[i], detour_size);
 
 #ifdef ASM_PREAMBLE
 		//move again at the begin of the block of instructions forming the patch
@@ -175,15 +625,38 @@ void build_patches(void){
 		patches[i].code = patches[i].code - test_code_size;
 #endif
 
-		
-		if(size >= 5){
+		if (instructions[i].indirect_jump == 'y'){
+			intermediate_target = instructions[i].middle_buffer;
+			if (intermediate_target == 0x0){
+				fail_unsupported_detour(&instructions[i], "missing intermediate landing pad", instruction_address);
+			}
+			patches[i].intermediate_zone_address = intermediate_target;
+
+			jmp_target = (char*)(patches[i].code);
+			jmp_displacement = (int)((char*)jmp_target - ((char*)(intermediate_target)+5));
+			pos = 0;
+        		v[pos++] = 0xe9;
+ 	       		v[pos++] = (unsigned char)(jmp_displacement & 0xff);
+       			v[pos++] = (unsigned char)(jmp_displacement >> 8 & 0xff);
+       			v[pos++] = (unsigned char)(jmp_displacement >> 16 & 0xff);
+       			v[pos++] = (unsigned char)(jmp_displacement >> 24 & 0xff);
+			memcpy((char*)(patches[i].jmp_to_post),v,5);
+
+			jmp_target = (char*)(intermediate_target);
+			jmp_displacement = (signed char)((char*)jmp_target - ((char*)(instruction_address)+2));
+			pos = 0;
+        		v[pos++] = 0xeb;
+ 	       		v[pos++] = (unsigned char)(jmp_displacement & 0xff);
+			memcpy((char*)(patches[i].jmp_to_intermediate),v,2);
+		}
+		else{
 			AUDIT
 			printf("packing a 5-byte jump for instruction with index %d\n",i);
 			jmp_target = (char*)(patches[i].code);
 			jmp_displacement = (int)((char*)jmp_target - ((char*)(instruction_address)+5));//this is because we substitute the original instruction with a 5-byte relative jmp
 			AUDIT
 			printf("jump displacement is %d\n",jmp_displacement);
-               	 fflush(stdout);
+       			 fflush(stdout);
 			pos = 0;
         		v[pos++] = 0xe9;
  	       		v[pos++] = (unsigned char)(jmp_displacement & 0xff);
@@ -193,60 +666,17 @@ void build_patches(void){
 			//record the patch to be applied
 			memcpy((char*)(patches[i].jmp_to_post),v,5);
 		}
-			else{
-				intermediate_target = instructions[i].middle_buffer;
-				if (intermediate_target == 0x0){
-					intermediate_target = book_intermediate_target(instruction_address, size);
-				}
-				if (intermediate_target == 0x0){
-					printf("skipping short instruction at runtime address %p index %d: no intermediate target available\n",(void*)instruction_address,i);
-					fflush(stdout);
-					patches[i].original_instruction_size = 0;
-				continue;
-			}
-			else{
-				AUDIT
-				printf("intermediate target available at address %p for the mov instruction at runtime address %p\n",(void*)intermediate_target,(void*)instruction_address);
-				instructions[i].middle_buffer = intermediate_target; 
-				jmp_target = (char*)(patches[i].code);
-				jmp_displacement = (int)((char*)jmp_target - ((char*)(intermediate_target)+5));//this is because we substite the original cli/nop instruction set with a 5-byte relative jmp from the intermediate area
-				AUDIT
-				printf("jump displacement from intermediate target is %d\n",jmp_displacement);
-               			fflush(stdout);
-				pos = 0;
-        			v[pos++] = 0xe9;
- 	       			v[pos++] = (unsigned char)(jmp_displacement & 0xff);
-       				v[pos++] = (unsigned char)(jmp_displacement >> 8 & 0xff);
-       				v[pos++] = (unsigned char)(jmp_displacement >> 16 & 0xff);
-       				v[pos++] = (unsigned char)(jmp_displacement >> 24 & 0xff);
-				//BUG FIXING WITH THE BELOW MEMCPY
-				memcpy((char*)(patches[i].jmp_to_post),v,5);
-				patches[i].intermediate_zone_address = intermediate_target;
-				
-				//we now prepare the jump to the intermediate zone for this instruction - this becomes the real block of instructions substituting the original mov instruction 
-				jmp_target = (char*)(intermediate_target);
-				jmp_displacement = (signed char)((char*)jmp_target - ((char*)(instruction_address)+2));//this is because we substite the original instrucion with a 2-byte relative jmp
-				AUDIT
-				if((char*)jmp_target < ((char*)(instruction_address)+2))
-						printf("negative intermediate jump displacement for instruction %d\n",i);
-				pos = 0;
-        			v[pos++] = 0xeb;
- 	       			v[pos++] = (unsigned char)(jmp_displacement & 0xff);
-				memcpy((char*)(patches[i].jmp_to_intermediate),v,2);
-
-			}
-		}
 
 #ifdef ASM_PREAMBLE
 		//NOTE: for the below code fragment you will need to have patches[i].code point to the copy of the original instruction - you will need to step forward other preceeding instructions forming the patch
 		patches[i].code = patches[i].code + test_code_size;
 #endif
 		
-		memcpy(patches[i].code + size, patches[i].functional_instr, patches[i].functional_instr_size);
+		memcpy(patches[i].code + detour_size, patches[i].functional_instr, patches[i].functional_instr_size);
 
-		jmp_target = (char*)(instruction_address)+size;
+		jmp_target = (char*)(instruction_address)+detour_size;
 
-		size += patches[i].functional_instr_size;
+		size = detour_size + patches[i].functional_instr_size;
 
 		jmp_back_displacement = (char*)jmp_target - ((char*)(patches[i].code)+size+5);//here we go beyond the instruction+jmp - but this is a baseline
 		AUDIT
@@ -260,20 +690,6 @@ void build_patches(void){
        		v[pos++] = (unsigned char)(jmp_back_displacement >> 24 & 0xff);
 		//log the jmp-back into the patch area 
 		memcpy((char*)(patches[i].code)+size,(char*)v,5);
-		
-		size -= patches[i].functional_instr_size;
-
-		if(instructions[i].rip_relative == 'y'){//in the patch we need to change the actual offset to be applied to RIP
-		       effective_operand_address = instructions[i].effective_operand_address;//this is based on the offset from the original RIP
-		       effective_operand_displacement = effective_operand_address - (uint64_t)(patches[i].code + size); 
-		       AUDIT
-		       printf("effective operand displacement is %p\n",(void*)effective_operand_displacement);
-
-		       patches[i].code[size-1] = (unsigned char)(effective_operand_displacement >> 24 & 0xff);
-		       patches[i].code[size-2] = (unsigned char)(effective_operand_displacement >> 16 & 0xff);
-		       patches[i].code[size-3] = (unsigned char)(effective_operand_displacement >> 8 & 0xff);
-		       patches[i].code[size-4] = (unsigned char)(effective_operand_displacement & 0xff);
-		}	
 	}
 }
 
@@ -284,10 +700,11 @@ void apply_patches(void){
 	unsigned long size;
 	unsigned long instruction_address;
 	unsigned long instruction_patch;
-	unsigned short instruction_short_patch;
+	unsigned long page_address;
+	unsigned long last_page_address;
 
 	for (i=0;i<target_instructions;i++){
-		size = instructions[i].size;
+		size = patches[i].original_instruction_size;
 		instruction_address = instructions[i].address;
 		if(patches[i].original_instruction_size == 0){
 			continue;
@@ -295,22 +712,27 @@ void apply_patches(void){
 		AUDIT
 		printf("applying a patch to instruction with index %d\n",i);
 		fflush(stdout);
-		if(size >= 5){ 
-			instruction_patch = (unsigned long)patches[i].jmp_to_post;
-			syscall(10, instruction_address & mask, PAGE, PROT_READ | PROT_EXEC |PROT_WRITE);
-			syscall(10, (instruction_address & mask) + PAGE, PAGE, PROT_READ | PROT_EXEC |PROT_WRITE);
-			memcpy((char*)instruction_address,(char*)instruction_patch,5);
-			//original permissions need to be restored - TO DO
-		}
-		else{
+		if (instructions[i].indirect_jump == 'y'){
 			syscall(10, (instruction_address & mask) - 128, PAGE, PROT_READ | PROT_EXEC |PROT_WRITE);
 			syscall(10, instruction_address & mask, PAGE, PROT_READ | PROT_EXEC |PROT_WRITE);
 			syscall(10, (instruction_address & mask) + PAGE, PAGE, PROT_READ | PROT_EXEC |PROT_WRITE);
 			memcpy((char*)instruction_address,(char*)patches[i].jmp_to_intermediate,2);
 			memcpy((char*)patches[i].intermediate_zone_address,(char*)patches[i].jmp_to_post,5);
-			AUDIT
-			printf("patch applied to instruction with index %d - intermediate jump required\n",i);	
 		}
+		else{
+			instruction_patch = (unsigned long)patches[i].jmp_to_post;
+			page_address = instruction_address & mask;
+			last_page_address = (instruction_address + size - 1) & mask;
+			syscall(10, page_address, PAGE, PROT_READ | PROT_EXEC |PROT_WRITE);
+			if (last_page_address != page_address){
+				syscall(10, last_page_address, PAGE, PROT_READ | PROT_EXEC |PROT_WRITE);
+			}
+			memcpy((char*)instruction_address,(char*)instruction_patch,5);
+			if (size > 5){
+				memset((char*)instruction_address + 5, 0x90, size - 5);
+			}
+		}
+		//original permissions need to be restored - TO DO
 	}
 }
 
@@ -399,6 +821,7 @@ int elf_parse(char ** function_names, char * parsable_elf){
 	char* aux;
 	char category;
 	char rip_relative;
+	char raw_line[LINE_SIZE];
 	uint64_t function_start_address;
 	uint64_t function_end_address;
 	uint64_t instruction_start_address;
@@ -407,6 +830,8 @@ int elf_parse(char ** function_names, char * parsable_elf){
 	unsigned long target_displacement;
 	int register_index;
 	long corrector;
+	int parsed_index;
+	parsed_instruction parsed;
 	
 
 	instructions = (instruction_record*)address;
@@ -455,6 +880,15 @@ int elf_parse(char ** function_names, char * parsable_elf){
 				while(1){
 					memcpy(prev_line,buffer,LINE_SIZE);
 					guard = fgets(buffer,LINE_SIZE,the_file);
+					if (guard != NULL){
+						strncpy(raw_line, buffer, sizeof(raw_line) - 1);
+						raw_line[sizeof(raw_line) - 1] = '\0';
+					}
+					parsed_index = -1;
+					if (guard != NULL && parse_disassembly_instruction(raw_line, &parsed)){
+						register_parsed_instruction(&parsed);
+						parsed_index = parsed_instructions_count - 1;
+					}
 					AUDIT
 					printf("%s",buffer);
 
@@ -528,6 +962,7 @@ int elf_parse(char ** function_names, char * parsable_elf){
 						AUDIT
 						printf("instruction address is %p\n",(void*)instruction_start_address);
 						instructions[target_instructions].address = instruction_start_address;
+						instructions[target_instructions].parsed_index = parsed_index;
 						//we now simply rewrite 0x0 on the structure that keeps the targeted memory location information
 						memset((char*)&(instructions[target_instructions].target),0x0,sizeof(target_address));
 
@@ -543,8 +978,10 @@ int elf_parse(char ** function_names, char * parsable_elf){
 							printf("instruction len is %lu\n",instruction_len);
 
 							instructions[target_instructions].size = instruction_len;
+							instructions[target_instructions].detour_size = instruction_len;
 							instructions[target_instructions].indirect_jump = 'n';
 							instructions[target_instructions].middle_buffer = 0x0;
+							instructions[target_instructions].stolen_instruction_count = 0;
 						p = strtok(NULL,":\t");
 						if(!strstr(p,"mov")) {
 							printf("parsing bug, expected 'mov' not foud\n");
@@ -742,7 +1179,7 @@ already_tokenized:
 									
 								/* Filtro di supporto backend-wide:
 								 * - solo addressing modes che il runtime sa riscrivere
-								 * - istruzioni corte solo se hanno un landing pad vicino
+								 * - il detour vero e proprio viene costruito in finalize_detours()
 								 */
 								if (instructions[target_instructions].target.base_index <= 0) {
 									continue;
@@ -750,13 +1187,8 @@ already_tokenized:
 								if (instructions[target_instructions].target.scale_index != 0) {
 									continue;
 								}
-								if (instructions[target_instructions].size < 5) {
-									instructions[target_instructions].middle_buffer =
-										book_intermediate_target(instruction_start_address, instruction_len);
-									if (instructions[target_instructions].middle_buffer == 0x0) {
-										continue;
-									}
-									instructions[target_instructions].indirect_jump = 'y';
+								if (instructions[target_instructions].parsed_index < 0) {
+									fail_unsupported_detour(&instructions[target_instructions], "missing parsed index for target instruction", instruction_start_address);
 								}
 
 								instructions[target_instructions].instrumentation_instructions = 0; 
@@ -873,6 +1305,10 @@ int __wrap_main(int argc, char ** argv){
 	char target_functions_buf[LINE_SIZE];
 	char *saveptr;
 
+	target_instructions = 0;
+	parsed_instructions_count = 0;
+	direct_branch_refs_count = 0;
+
 	setup_memory_access_rules();
 
 	asl_randomization = (unsigned long)elf_parse;
@@ -896,6 +1332,7 @@ int __wrap_main(int argc, char ** argv){
 	find_intermediate_zones(disassembly_file);
 
 	ret = elf_parse(functions,disassembly_file);		
+	finalize_detours();
 
 	AUDIT {
 		printf("found %d instructions to instrument\n",ret);

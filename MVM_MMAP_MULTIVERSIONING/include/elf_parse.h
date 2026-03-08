@@ -9,6 +9,8 @@
 #define LINE_SIZE (1024) //maximum size in bytes of the line of -D elf listing
 
 #define BLOCK 128 //max num bytes for representing the mnemonic of an instruction or its code/operands
+#define MAX_STOLEN_INSTRUCTIONS 8
+#define MAX_STOLEN_BYTES 64
 
 typedef struct _target_address{
 	long displacement;
@@ -19,9 +21,11 @@ typedef struct _target_address{
 
 typedef struct _instruction_record{
 	int record_index;
+	int parsed_index;
 	char *function;//the function the instruction belongs to
 	uint64_t address;
 	unsigned long size;
+	unsigned long detour_size;
 	char indirect_jump;//'y' or 'n' - this must be 'y' for any instruction whose size is less than 5 bytes
 	uint64_t middle_buffer;//this is usefull only for intructions requiring indirect jumps - 0x0 should be the default
 	char type;//load 'l' or store 's'
@@ -35,12 +39,21 @@ typedef struct _instruction_record{
 	char dest[BLOCK];
 	int data_size;
 	int instrumentation_instructions;//number of instructions in the instrumentation scheme (including the original one to be instrumented or an equivalent)
+	int stolen_instruction_count;
 	target_address target;
+	struct {
+		uint64_t address;
+		unsigned long size;
+		char pc_relative;//'y' or 'n'
+		char control_flow;//'y' or 'n'
+		int displacement_size;
+		uint64_t target_address;
+	} stolen[MAX_STOLEN_INSTRUCTIONS];
 } instruction_record;
 
 #define NUM_INSTRUCTIONS ((int)(SIZE/sizeof(instruction_record)))//this is the max number of instructions we can intercept
 
-#define MAX_INST_LEN 12
+#define MAX_INST_LEN MAX_STOLEN_BYTES
 #define CODE_BLOCK 512 
 typedef struct _patch{
 	char functional_instr[CODE_BLOCK];//additional room for instructions (if any) to be finally posted onto 'block'

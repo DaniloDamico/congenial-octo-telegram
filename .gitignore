@@ -39,6 +39,7 @@
 /MVM_MMAP_MULTIVERSIONING/user-defined/final-binary
 
 # Archives, logs, and generated reports
+logs/
 *.log
 *.tar
 *.tar.*
