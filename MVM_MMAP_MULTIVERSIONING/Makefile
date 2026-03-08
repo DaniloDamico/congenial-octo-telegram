@@ -2,7 +2,9 @@
 #APPLICATION SPECIFIC STUFF
 #the below specify the directory where the user application is located, the name of the executable to be generated, the name of the object file of the program and the names of the target functions to instrument 
 #IMPORTANT: a Makefile in the APP dir is responsible for generating the .o file specified by APP_OBJ
-APP = ../bin
+BACKEND_DIR := $(CURDIR)
+
+APP = $(BACKEND_DIR)/../bin
 EXECUTABLE = $(APP)/PARSIR-simulator
 APP_OBJ = $(APP)/PARSIR-simulator.o
 #TARGET_MODULES= a.c  sub-dir/b.c this is an example usage
@@ -21,10 +23,10 @@ else
 OBJECTS_FLAG =
 endif
 
-INCLUDE = $(PWD)/include
-OBJ = $(PWD)/obj
-LIB = $(PWD)/lib
-TEMP = $(PWD)/temp
+INCLUDE = $(BACKEND_DIR)/include
+OBJ = $(BACKEND_DIR)/obj
+LIB = $(BACKEND_DIR)/lib
+TEMP = $(BACKEND_DIR)/temp
 DISASSEMBLY = $(TEMP)/disassembly
 DISASSEMBLY_FILE = -Ddisassembly_file=\"$(DISASSEMBLY)\"
 TEMPDIR = -Dtemp_dir=$(TEMP)
@@ -36,7 +38,7 @@ TEMPOBJ = -Dtemp_obj_file=\"$(TEMP)/$(INTERMEDIATEOBJFILE)\"
 TF=-Dtarget_functions=\"$(TARGET_FUNCTIONS)\"
 
 #USER DEFINED STUFF - PLEASE CHANGE WHATEVER YOU NEED
-USER_DEFINED = $(PWD)/user-defined
+USER_DEFINED = $(BACKEND_DIR)/user-defined
 USER_DEFINED_FILE = intermediate.S
 USER_DEFINED_OBJ_FILE = intermediate.o
 UDTEMPDIR = -Duser_defined_dir=\"$(USER_DEFINED)\"

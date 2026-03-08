@@ -53,6 +53,11 @@ grid_ckpt_bs:
 	$(CC) $(SRCS3) $(CFLAGS) $(GRID_CKPT_BS_FLAGS) -o $(TARGET3)
 	ld -r $(TARGET1) $(TARGET2) $(TARGET3) --wrap=malloc --wrap=free -o pcs.o
 
+mmap_mv:
+	$(CC) $(SRCS1) $(CFLAGS) $(MMAP_MV_FLAGS) $(OBJ_FLAG) $(TA_FLAG) -o $(TARGET1)
+	$(CC) $(SRCS3) $(CFLAGS) $(MMAP_MV_FLAGS) $(OBJ_FLAG) $(TA_FLAG) -o $(TARGET3)
+	ld -r $(TARGET1) $(TARGET2) $(TARGET3) --wrap=malloc --wrap=free -o pcs.o
+
 mmap_mv_store:
 	$(CC) $(SRCS1) $(CFLAGS) $(MMAP_MV_STORE_FLAGS) $(OBJ_FLAG) $(TA_FLAG) -o $(TARGET1)
 	$(CC) $(SRCS3) $(CFLAGS) $(MMAP_MV_STORE_FLAGS) $(OBJ_FLAG) $(TA_FLAG) -o $(TARGET3)

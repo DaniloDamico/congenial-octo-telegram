@@ -31,6 +31,10 @@ grid_ckpt_bs:
 	$(CC) $(SRCS) $(CFLAGS) $(GRID_CKPT_BS_FLAGS) -o $(TARGET)
 	ld -r $(TARGET) --wrap=malloc --wrap=free -o highway.o
 
+mmap_mv:
+	$(CC) $(SRCS) $(CFLAGS) $(MMAP_MV_FLAGS) -o $(TARGET)
+	ld -r $(TARGET) --wrap=malloc --wrap=free -o highway.o
+
 mmap_mv_store:
 	$(CC) $(SRCS) $(CFLAGS) $(MMAP_MV_STORE_FLAGS) -o $(TARGET)
 	ld -r $(TARGET) --wrap=malloc --wrap=free -o highway.o

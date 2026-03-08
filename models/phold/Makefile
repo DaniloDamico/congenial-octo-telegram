@@ -43,6 +43,10 @@ grid_ckpt_bs:
 	$(CC) $(SRCS) $(CFLAGS) $(GRID_CKPT_BS_FLAGS) $(OBJ_FLAG) $(M_FLAG) -o $(TARGET)
 	ld -r $(TARGET) --wrap=malloc --wrap=free -o phold.o
 
+mmap_mv:
+	$(CC) $(SRCS) $(CFLAGS) $(MMAP_MV_FLAGS) $(OBJ_FLAG) $(M_FLAG) -o $(TARGET)
+	ld -r $(TARGET) --wrap=malloc --wrap=free -o phold.o
+
 mmap_mv_store:
 	$(CC) $(SRCS) $(CFLAGS) $(MMAP_MV_STORE_FLAGS) $(OBJ_FLAG) $(M_FLAG) -o $(TARGET)
 	ld -r $(TARGET) --wrap=malloc --wrap=free -o phold.o
