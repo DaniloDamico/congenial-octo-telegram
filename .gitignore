@@ -1,0 +1,70 @@
+# Build directories
+/bin/
+/lib/
+**/obj/
+**/lib/
+**/temp/
+
+# Model build artifacts
+**/intermediate-*
+**/*.o
+**/*.a
+**/*.la
+**/*.lo
+**/*.so
+**/*.so.*
+**/*.dylib
+**/*.dll
+**/*.elf
+**/*.exe
+**/*.out
+**/*.app
+
+# Generated MVM helpers
+/MVM_CHUNK/user-defined/intermediate.S
+/MVM_CHUNK/user-defined/intermediate.o
+/MVM_CHUNK/user-defined/translate-to-binary
+/MVM_CHUNK/user-defined/final-binary
+/MVM_GRID_CKPT/user-defined/intermediate.S
+/MVM_GRID_CKPT/user-defined/intermediate.o
+/MVM_GRID_CKPT/user-defined/translate-to-binary
+/MVM_GRID_CKPT/user-defined/final-binary
+/MVM_GRID_CKPT_BS/user-defined/intermediate.S
+/MVM_GRID_CKPT_BS/user-defined/intermediate.o
+/MVM_GRID_CKPT_BS/user-defined/translate-to-binary
+/MVM_GRID_CKPT_BS/user-defined/final-binary
+/MVM_MMAP_MULTIVERSIONING/user-defined/intermediate.S
+/MVM_MMAP_MULTIVERSIONING/user-defined/intermediate.o
+/MVM_MMAP_MULTIVERSIONING/user-defined/translate-to-binary
+/MVM_MMAP_MULTIVERSIONING/user-defined/final-binary
+
+# Archives, logs, and generated reports
+*.log
+*.tar
+*.tar.*
+*.tgz
+*.gz
+*.bz2
+*.xz
+*.zip
+*.7z
+*.csv
+*.tsv
+*.dat
+*.prof
+*.trace
+*.png
+*.svg
+*.pdf
+
+# Machine-local runtime data
+/setup-data/*.txt
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

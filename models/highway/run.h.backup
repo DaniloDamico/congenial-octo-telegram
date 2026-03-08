@@ -1,0 +1,10 @@
+#ifndef RUN_H
+#define RUN_H
+
+#define THREADS (1) 
+#define OBJECTS (3000)
+#define LOOKAHEAD (1.0)
+
+#define AUDIT if (0)
+
+#endif
