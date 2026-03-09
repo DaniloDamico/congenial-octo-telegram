@@ -838,13 +838,11 @@ static void mvmm_region_rollback(mvmm_region *r, uint64_t target_ts)
             if (slot0_ts != UINT64_MAX && slot0_ts > target_ts)
             {
                 ps->slot_ts[MVMM_SLOT_0] = UINT64_MAX;
-                ps->slots[MVMM_SLOT_0] = NULL;
             }
 
             if (slot1_ts != UINT64_MAX && slot1_ts > target_ts)
             {
                 ps->slot_ts[MVMM_SLOT_1] = UINT64_MAX;
-                ps->slots[MVMM_SLOT_1] = NULL;
             }
 #endif
         }
