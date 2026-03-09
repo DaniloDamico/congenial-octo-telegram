@@ -1,6 +1,3 @@
-#include "mvm.h"
-#include "mvm.h"
-#include "mvm.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,9 +36,6 @@ void alloc_lp_state_memory(unsigned int me) {
     state = (lp_state_type *)malloc(sizeof(lp_state_type));
 
     if (state == NULL) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
         printf("out of memory at startup\n");
         exit(EXIT_FAILURE);
     }
@@ -74,9 +68,6 @@ void ProcessEvent(unsigned int me, double now, int event_type, void *the_event_c
 #endif
 
     if (state != NULL) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
         SET_MEMORY(&state->lvt, now);
         temp = state->executed_events + 1;
         SET_MEMORY(&state->executed_events, temp);
@@ -107,9 +98,6 @@ INSTRUMENT;
 #ifdef UNBALANCE
         state->ref_ta = state->ta = TA;
         if (me < (OBJECTS >> 1)) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
             state->ref_ta = state->ta = TA / 2;
         }
 #else
@@ -123,9 +111,6 @@ INSTRUMENT;
 
         // Show current configuration, just once
         if (me == 0) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
             printf("CURRENT CONFIGURATION:\ncomplete calls: %d\nTA: %f\nta_duration: %f\nta_change: "
                    "%f\nchannels_per_cell: %d\nfading_recheck: %d\nvariable_ta: %d\nseeds: %d-%d\nInitial calls: %d\n",
                    complete_calls, state->ta, state->ta_duration, state->ta_change, state->channels_per_cell,
@@ -140,17 +125,11 @@ INSTRUMENT;
         state->channel_state = channel_state;
         // state->channel_state = malloc(sizeof(unsigned int) * 2 * (CHANNELS_PER_CELL / BITS + 1));
         for (w = 0; w < state->channel_counter / (sizeof(int) * 8) + 1; w++) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
             state->channel_state[w] = 0;
         }
 
         // Start the simulation
         for (i = 0; i < init_calls; i++) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
             timestamp = (simtime_t)(0.02 * Random(s1, s2));
             ScheduleNewEvent(me, timestamp, START_CALL, NULL, 0);
             // printf("INIT: scheduled new START_CALL at time %e\n",timestamp);
@@ -170,9 +149,6 @@ INSTRUMENT;
         SET_MEMORY(&state->arriving_calls, temp);
 
         if (state->channel_counter == 0) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
             temp = state->blocked_on_setup + 1;
             SET_MEMORY(&state->blocked_on_setup, temp);
             printf("no channel available!!\n");
@@ -219,23 +195,14 @@ INSTRUMENT;
 
 #ifndef SPECULATION
             if (new_event_content.call_term_time < barrier) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
                 new_event_content.call_term_time = barrier;
             }
             if (handoff_time < barrier) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
                 handoff_time = barrier;
             }
 #endif
 
             if (new_event_content.call_term_time <= handoff_time + HANDOFF_SHIFT) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
                 ScheduleNewEvent(me, new_event_content.call_term_time, END_CALL, (char *)&new_event_content,
                                  sizeof(new_event_content));
             } else {
@@ -248,9 +215,6 @@ INSTRUMENT;
         }
 
         if (new_call == 1) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
             // Determine the time at which a new call will be issued
             switch (DISTRIBUTION) {
 
@@ -268,9 +232,6 @@ INSTRUMENT;
             }
 #ifndef SPECULATION
             if (timestamp < (now + LOOKAHEAD)) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
                 timestamp = now + LOOKAHEAD;
             }
 #endif
@@ -309,9 +270,6 @@ INSTRUMENT;
         SET_MEMORY(&state->arriving_calls, temp);
 
         if (state->channel_counter == 0) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
             temp = state->blocked_on_handoff + 1;
             SET_MEMORY(&state->blocked_on_handoff, temp);
         } else {
@@ -335,9 +293,6 @@ INSTRUMENT;
             }
 
             if (new_event_content.call_term_time <= handoff_time + HANDOFF_SHIFT) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
                 ScheduleNewEvent(me, new_event_content.call_term_time, END_CALL, (char *)&new_event_content,
                                  sizeof(new_event_content));
             } else {
@@ -360,9 +315,6 @@ INSTRUMENT;
     SET_MEMORY(s2, *s2);
 
     if (!((state->executed_events) % 1000)) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
         printf("object %d - count of events is %d\n", me, state->executed_events);
     }
 }
@@ -391,42 +343,24 @@ double recompute_ta(double ref_ta, simtime_t time_now) {
     now %= WEEK;
 
     if (now > 5 * DAY) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
         return ref_ta * WEEKEND_FACTOR;
     }
 
     now %= DAY;
 
     if (now < EARLY_MORNING) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
         return ref_ta * EARLY_MORNING_FACTOR;
     }
     if (now < MORNING) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
         return ref_ta * MORNING_FACTOR;
     }
     if (now < LUNCH) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
         return ref_ta * LUNCH_FACTOR;
     }
     if (now < AFTERNOON) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
         return ref_ta * AFTERNOON_FACTOR;
     }
     if (now < EVENING) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
         return ref_ta * EVENING_FACTOR;
     }
 
@@ -436,9 +370,6 @@ INSTRUMENT;
 inline double my_pow(double x, int y) {
     double result = 1.0;
     for (int i = 0; i < y; ++i) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
         result *= x;
     }
     return result;
@@ -469,43 +400,22 @@ void deallocation(unsigned int me, lp_state_type *pointer, int ch, simtime_t lvt
 
     c = pointer->channels;
     while (c != NULL) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
         if (c->channel_id == ch) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
             break;
         }
         c = c->prev;
     }
     if (c != NULL) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
         if (c == pointer->channels) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
             SET_MEMORY(&pointer->channels, c->prev);
             if (pointer->channels) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
                 SET_MEMORY(&pointer->channels->next, NULL);
             }
         } else {
             if (c->next != NULL) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
                 SET_MEMORY(&c->next->prev, c->prev);
             }
             if (c->prev != NULL) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
                 SET_MEMORY(&c->prev->next, c->next);
             }
         }
@@ -526,9 +436,6 @@ void fading_recheck(lp_state_type *pointer, uint32_t *s1, uint32_t *s2) {
     ch = pointer->channels;
 
     while (ch != NULL) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
         ch->sir_data->fading = Expent(1.0, s1, s2);
         SET_MEMORY(&ch->sir_data->fading, ch->sir_data->fading);
         ch = ch->prev;
@@ -543,30 +450,18 @@ int allocation(lp_state_type *pointer, uint32_t *s1, uint32_t *s2) {
 
     index = -1;
     for (i = 0; i < pointer->channels_per_cell; i++) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
         if (!CHECK_CHANNEL(pointer, i)) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
             index = i;
             break;
         }
     }
 
     if (index != -1) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
 
         SET_CHANNEL(pointer, index);
 
         c = (channel *)malloc(sizeof(channel));
         if (c == NULL) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
             printf("malloc error: unable to allocate channel!\n");
             exit(-1);
         }
@@ -577,17 +472,11 @@ INSTRUMENT;
         c->sir_data = (sir_data_per_cell *)malloc(sizeof(sir_data_per_cell));
         SET_MEMORY(&c->sir_data, c->sir_data);
         if (c->sir_data == NULL) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
             printf("malloc error: unable to allocate SIR data!\n");
             exit(-1);
         }
 
         if (pointer->channels != NULL) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
             SET_MEMORY(&pointer->channels->next, c);
         }
         SET_MEMORY(&pointer->channels, c);
@@ -596,17 +485,11 @@ INSTRUMENT;
 
         ch = pointer->channels->prev;
         while (ch != NULL) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
             summ += generate_cross_path_gain(s1, s2) * ch->sir_data->power * ch->sir_data->fading;
             ch = ch->prev;
         }
 
         if (summ == 0.0) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
             // The newly allocated channel receives the minimal power
             SET_MEMORY(&c->sir_data->power, MIN_POWER);
         } else {
@@ -615,16 +498,10 @@ INSTRUMENT;
             c->sir_data->power = ((SIR_AIM * summ) / (generate_path_gain(s1, s2) * c->sir_data->fading));
             SET_MEMORY(&c->sir_data->power, c->sir_data->power);
             if (c->sir_data->power < MIN_POWER) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
                 // c->sir_data->power = MIN_POWER;
                 SET_MEMORY(&c->sir_data->power, MIN_POWER);
             }
             if (c->sir_data->power > MAX_POWER) {
-INSTRUMENT;
-INSTRUMENT;
-INSTRUMENT;
                 // c->sir_data->power = MAX_POWER;
                 SET_MEMORY(&c->sir_data->power, MAX_POWER);
             }
