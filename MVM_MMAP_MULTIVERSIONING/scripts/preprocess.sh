@@ -329,6 +329,69 @@ while i < N:
     out.append(ch)
     i += 1
 
-sys.stdout.write(''.join(out))
+def densify_instrumented_text(text):
+    lines = text.splitlines(True)
+    result = []
+    in_function = False
+    function_brace_depth = 0
+    last_significant = ''
+    in_printf_call = False
+
+    def looks_like_function_start(stripped):
+        if not stripped.endswith('{'):
+            return False
+        if '(' not in stripped or ')' not in stripped:
+            return False
+        return re.match(r'^(if|for|while|switch|else|do)\b', stripped) is None
+
+    def is_hot_memory_line(stripped):
+        return ('->' in stripped or
+                'SET_MEMORY(' in stripped or
+                'memcpy(' in stripped or
+                'malloc(' in stripped or
+                'printf(' in stripped)
+
+    for line in lines:
+        stripped = line.strip()
+
+        if not in_function:
+            result.append(line)
+            if looks_like_function_start(stripped):
+                function_brace_depth = line.count('{') - line.count('}')
+                in_function = function_brace_depth > 0
+            continue
+
+        statement_can_start = (last_significant == '' or
+                               last_significant.endswith(';') or
+                               last_significant.endswith('{') or
+                               last_significant.endswith('}') or
+                               last_significant.endswith(':'))
+
+        if in_printf_call and not statement_can_start and 'state->' in stripped:
+            line = re.sub(r'\bstate(?:->\w+)+', lambda m: f'INSTRUMENT_EXPR({m.group(0)})', line)
+            stripped = line.strip()
+
+        if (statement_can_start and stripped and stripped != 'INSTRUMENT;' and
+                not stripped.startswith('#') and is_hot_memory_line(stripped)):
+            if not result or result[-1].strip() != 'INSTRUMENT;':
+                indent = re.match(r'[ 	]*', line).group(0)
+                result.append(indent + 'INSTRUMENT;\n')
+
+        result.append(line)
+        if stripped and not stripped.startswith('#'):
+            if 'printf(' in stripped:
+                in_printf_call = True
+            if in_printf_call and stripped.endswith(');'):
+                in_printf_call = False
+            last_significant = stripped
+        function_brace_depth += line.count('{') - line.count('}')
+        if function_brace_depth <= 0:
+            in_function = False
+            in_printf_call = False
+            last_significant = ''
+
+    return ''.join(result)
+
+sys.stdout.write(densify_instrumented_text(''.join(out)))
 PY
 

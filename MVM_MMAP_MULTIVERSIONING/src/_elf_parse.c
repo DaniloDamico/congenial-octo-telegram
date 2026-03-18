@@ -59,6 +59,10 @@ static int parsed_instructions_count = 0;
 static direct_branch_ref direct_branch_refs[MAX_PARSED_INSTRUCTIONS];
 static int direct_branch_refs_count = 0;
 
+#define LANDING_PAD_SLOT_SIZE 5UL
+#define LANDING_PAD_WIDTH_SLOTS 2
+#define LANDING_PAD_WIDTH (LANDING_PAD_SLOT_SIZE * LANDING_PAD_WIDTH_SLOTS)
+
 void audit_block(instruction_record *the_record){
 	printf("instruction record:\n \
 			belonging function is %s\n \
@@ -110,20 +114,119 @@ void build_intermediate_representation(void){
 	}
 }
 
+static int landing_pad_run_is_available(int start_index){
+
+	int slot;
+	uint64_t base_address;
+
+	if (start_index < 0){
+		return 0;
+	}
+
+	if ((start_index + LANDING_PAD_WIDTH_SLOTS - 1) > intermediate_zones_index){
+		return 0;
+	}
+
+	base_address = intermediate_zones[start_index];
+	for (slot = 0; slot < LANDING_PAD_WIDTH_SLOTS; slot++) {
+		int current_index = start_index + slot;
+		if (intermediate_flags[current_index] != 0) {
+			return 0;
+		}
+		if (intermediate_zones[current_index] != (base_address + slot * LANDING_PAD_SLOT_SIZE)) {
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
+static void reserve_landing_pad_run(int start_index){
+
+	int slot;
+
+	for (slot = 0; slot < LANDING_PAD_WIDTH_SLOTS; slot++) {
+		intermediate_flags[start_index + slot] = 1;
+	}
+}
+
+static int landing_pad_block_start(int index){
+
+	while (index > 0 && intermediate_zones[index] == (intermediate_zones[index - 1] + LANDING_PAD_SLOT_SIZE)) {
+		index--;
+	}
+
+	return index;
+}
+
+static int landing_pad_block_end(int index){
+
+	while (index < intermediate_zones_index && intermediate_zones[index + 1] == (intermediate_zones[index] + LANDING_PAD_SLOT_SIZE)) {
+		index++;
+	}
+
+	return index;
+}
+
 uint64_t book_intermediate_target(uint64_t instruction_address, unsigned long instruction_size){
 
 	int i;
+	int best_index = -1;
+	int64_t best_block_distance = INT64_MAX;
+	int64_t jump_origin = (int64_t)instruction_address + 2;
 
-	for (i = 0; i < intermediate_zones_index; i++){
-		if((intermediate_zones[i] >= (instruction_address + instruction_size) - 128) && (intermediate_zones[i] <= (instruction_address + instruction_size) + 127) && (intermediate_flags[i] == 0)){
-				intermediate_flags[i] = 1;
-				AUDIT 
-				printf("found free intermediate zone at index %d - making it busy\n",i);
-				return intermediate_zones[i];
-			}
+	(void)instruction_size;
 
-	}	
-	return 0x0;
+	for (i = 0; (i + LANDING_PAD_WIDTH_SLOTS - 1) <= intermediate_zones_index; i++) {
+		int block_start;
+		int block_end;
+		int64_t displacement = (int64_t)intermediate_zones[i] - jump_origin;
+		int64_t block_start_address;
+		int64_t block_end_address;
+		int64_t block_distance;
+
+		if (displacement < INT8_MIN || displacement > INT8_MAX) {
+			continue;
+		}
+
+		if (!landing_pad_run_is_available(i)) {
+			continue;
+		}
+
+		block_start = landing_pad_block_start(i);
+		block_end = landing_pad_block_end(i + LANDING_PAD_WIDTH_SLOTS - 1);
+		block_start_address = (int64_t)intermediate_zones[block_start];
+		block_end_address = (int64_t)intermediate_zones[block_end];
+
+		if (jump_origin < block_start_address) {
+			block_distance = block_start_address - jump_origin;
+		}
+		else if (jump_origin > block_end_address) {
+			block_distance = jump_origin - block_end_address;
+		}
+		else {
+			block_distance = 0;
+		}
+
+		if (block_distance > best_block_distance) {
+			continue;
+		}
+		if (block_distance == best_block_distance && best_index >= 0 && i >= best_index) {
+			continue;
+		}
+
+		best_block_distance = block_distance;
+		best_index = i;
+	}
+
+	if (best_index < 0) {
+		return 0x0;
+	}
+
+	reserve_landing_pad_run(best_index);
+	AUDIT
+	printf("found free landing pad at index %d - reserving %d slots\n", best_index, LANDING_PAD_WIDTH_SLOTS);
+	return intermediate_zones[best_index];
 }
 
 static inline char *skip_spaces(char *s){
@@ -318,44 +421,9 @@ static void register_parsed_instruction(const parsed_instruction *instruction){
 	}
 }
 
-static int target_record_index_for_address(uint64_t address, int exclude_record){
-
-	int i;
-
-	for (i = 0; i < target_instructions; i++){
-		if (i == exclude_record){
-			continue;
-		}
-		if (instructions[i].address == address){
-			return i;
-		}
-	}
-
-	return -1;
-}
-
-static int has_external_direct_branch_target(uint64_t range_start, uint64_t range_end){
-
-	int i;
-
-	for (i = 0; i < direct_branch_refs_count; i++){
-		if (direct_branch_refs[i].target_address <= range_start ||
-			direct_branch_refs[i].target_address >= range_end){
-			continue;
-		}
-
-		if (direct_branch_refs[i].source_address < range_start ||
-			direct_branch_refs[i].source_address >= range_end){
-			return 1;
-		}
-	}
-
-	return 0;
-}
-
 static void fail_unsupported_detour(const instruction_record *record, const char *reason, uint64_t detail_address){
 
-	printf("%s: cannot build a detour for %s at %p (%s, detail=%p)\n",
+	printf("%s: cannot allocate a landing pad for %s at %p (%s, detail=%p)\n",
 		VM_NAME,
 		record->function,
 		(void*)record->address,
@@ -365,10 +433,15 @@ static void fail_unsupported_detour(const instruction_record *record, const char
 	exit(EXIT_FAILURE);
 }
 
-static int configure_short_jump_fallback(instruction_record *record){
+static int configure_landing_pad(instruction_record *record){
 
-	uint64_t intermediate_target = book_intermediate_target(record->address, record->size);
+	uint64_t intermediate_target;
 
+	if (record == NULL || record->size < 2){
+		return 0;
+	}
+
+	intermediate_target = book_intermediate_target(record->address, record->size);
 	if (intermediate_target == 0x0){
 		return 0;
 	}
@@ -386,254 +459,19 @@ static int configure_short_jump_fallback(instruction_record *record){
 	return 1;
 }
 
-static int serious_detour_enabled(void){
-
-#ifdef MMAP_MV_STORE
-	return 0;
-#else
-	return 1;
-#endif
-}
-
-static int instruction_references_register_alias(const char *text, int reg_index){
-
-	static const char *aliases[][6] = {
-		{NULL, NULL, NULL, NULL, NULL, NULL},
-		{"%r15", "%r15d", "%r15w", "%r15b", NULL, NULL},
-		{"%r14", "%r14d", "%r14w", "%r14b", NULL, NULL},
-		{"%r13", "%r13d", "%r13w", "%r13b", NULL, NULL},
-		{"%r12", "%r12d", "%r12w", "%r12b", NULL, NULL},
-		{"%rbp", "%ebp", "%bp", "%bpl", NULL, NULL},
-		{"%rbx", "%ebx", "%bx", "%bl", NULL, NULL},
-		{"%r11", "%r11d", "%r11w", "%r11b", NULL, NULL},
-		{"%r10", "%r10d", "%r10w", "%r10b", NULL, NULL},
-		{"%r9", "%r9d", "%r9w", "%r9b", NULL, NULL},
-		{"%r8", "%r8d", "%r8w", "%r8b", NULL, NULL},
-		{"%rax", "%eax", "%ax", "%al", NULL, NULL},
-		{"%rcx", "%ecx", "%cx", "%cl", NULL, NULL},
-		{"%rdx", "%edx", "%dx", "%dl", NULL, NULL},
-		{"%rsi", "%esi", "%si", "%sil", NULL, NULL},
-		{"%rdi", "%edi", "%di", "%dil", NULL, NULL}
-	};
-	int i;
-
-	if (text == NULL || reg_index <= 0 || reg_index >= (int)(sizeof(aliases) / sizeof(aliases[0]))){
-		return 0;
-	}
-
-	for (i = 0; aliases[reg_index][i] != NULL; i++){
-		if (strstr(text, aliases[reg_index][i]) != NULL){
-			return 1;
-		}
-	}
-
-	return 0;
-}
-
-static int instruction_overwrites_register_without_reading_it(const char *text, int reg_index){
-
-	char local_text[BLOCK];
-	char *saveptr = NULL;
-	char *op;
-	char *operands;
-	char *operand_saveptr = NULL;
-	char *source;
-	char *dest;
-
-	if (text == NULL){
-		return 0;
-	}
-
-	strncpy(local_text, text, sizeof(local_text) - 1);
-	local_text[sizeof(local_text) - 1] = '\0';
-
-	op = strtok_r(local_text, " \t", &saveptr);
-	if (op == NULL){
-		return 0;
-	}
-
-	operands = skip_spaces(saveptr);
-	if (operands == NULL || operands[0] == '\0'){
-		return 0;
-	}
-
-	source = strtok_r(operands, ",", &operand_saveptr);
-	dest = strtok_r(NULL, ",", &operand_saveptr);
-	source = skip_spaces(source);
-	dest = skip_spaces(dest);
-
-	if (dest == NULL || dest[0] == '\0'){
-		return 0;
-	}
-
-	if (strncmp(op, "mov", 3) != 0 && strcmp(op, "lea") != 0){
-		return 0;
-	}
-
-	if (!instruction_references_register_alias(dest, reg_index)){
-		return 0;
-	}
-
-	if (instruction_references_register_alias(source, reg_index)){
-		return 0;
-	}
-
-	return 1;
-}
-
-static int store_mode_can_use_serious_detour(const instruction_record *record, int parsed_index, int stolen_instruction_count){
-
-	int j;
-
-	if (record == NULL){
-		return 0;
-	}
-
-	if (record->target.base_index <= 0){
-		return 0;
-	}
-
-	for (j = 1; j < stolen_instruction_count; j++){
-		const parsed_instruction *parsed;
-
-		if ((parsed_index + j) >= parsed_instructions_count){
-			return 0;
-		}
-		parsed = &parsed_instructions[parsed_index + j];
-		if (instruction_references_register_alias(parsed->text, record->target.base_index) &&
-			!instruction_overwrites_register_without_reading_it(parsed->text, record->target.base_index)){
-			return 0;
-		}
-	}
-
-	return 1;
-}
-
 static void finalize_detours(void){
 
 	int i;
-	int j;
 
-	for (i = 0; i < target_instructions; i++){
-		unsigned long detour_size = 0;
-		uint64_t detour_start = instructions[i].address;
-		int parsed_index = instructions[i].parsed_index;
-		const char *fallback_reason = NULL;
-		uint64_t fallback_detail = 0x0;
-
+	for (i = 0; i < target_instructions; i++) {
 		instructions[i].indirect_jump = 'n';
 		instructions[i].middle_buffer = 0x0;
 		instructions[i].detour_size = instructions[i].size;
 		instructions[i].stolen_instruction_count = 0;
 
-			if (instructions[i].size >= 5){
-				instructions[i].stolen_instruction_count = 1;
-				instructions[i].stolen[0].address = instructions[i].address;
-			instructions[i].stolen[0].size = instructions[i].size;
-			instructions[i].stolen[0].pc_relative = 'n';
-			instructions[i].stolen[0].control_flow = 'n';
-			instructions[i].stolen[0].displacement_size = 0;
-			instructions[i].stolen[0].target_address = 0x0;
-				continue;
-			}
-
-			if (!serious_detour_enabled()){
-				if (configure_short_jump_fallback(&instructions[i])){
-					continue;
-				}
-			}
-
-			if (parsed_index < 0 || parsed_index >= parsed_instructions_count){
-				fallback_reason = "missing parsed instruction metadata";
-			goto fallback;
+		if (!configure_landing_pad(&instructions[i])) {
+			fail_unsupported_detour(&instructions[i], "missing wide landing pad", instructions[i].address);
 		}
-
-		while (detour_size < 5){
-			parsed_instruction *parsed;
-			int stolen_index = instructions[i].stolen_instruction_count;
-
-			if ((parsed_index + stolen_index) >= parsed_instructions_count){
-				fallback_reason = "detour runs beyond parsed instruction stream";
-				goto fallback;
-			}
-			if (stolen_index >= MAX_STOLEN_INSTRUCTIONS){
-				fallback_reason = "too many stolen instructions";
-				goto fallback;
-			}
-
-			parsed = &parsed_instructions[parsed_index + stolen_index];
-			if (parsed->address != (detour_start + detour_size)){
-				fallback_reason = "non-contiguous stolen bytes";
-				fallback_detail = parsed->address;
-				goto fallback;
-			}
-			if ((detour_size + parsed->size) > MAX_STOLEN_BYTES){
-				fallback_reason = "detour exceeds byte budget";
-				fallback_detail = parsed->address;
-				goto fallback;
-			}
-			if (stolen_index > 0 && target_record_index_for_address(parsed->address, i) >= 0){
-				fallback_reason = "detour would swallow another instrumented access";
-				fallback_detail = parsed->address;
-				goto fallback;
-			}
-
-			instructions[i].stolen[stolen_index].address = parsed->address;
-			instructions[i].stolen[stolen_index].size = parsed->size;
-			instructions[i].stolen[stolen_index].pc_relative = parsed->pc_relative;
-			instructions[i].stolen[stolen_index].control_flow = parsed->control_flow;
-			instructions[i].stolen[stolen_index].displacement_size = parsed->displacement_size;
-			instructions[i].stolen[stolen_index].target_address = parsed->target_address;
-
-			detour_size += parsed->size;
-			instructions[i].stolen_instruction_count++;
-		}
-
-			for (j = 0; j < instructions[i].stolen_instruction_count; j++){
-			uint64_t target_address = instructions[i].stolen[j].target_address;
-			int displacement_size = instructions[i].stolen[j].displacement_size;
-
-			if (instructions[i].stolen[j].control_flow == 'y' && displacement_size == 0){
-				fallback_reason = "control-flow instruction without relocatable displacement";
-				fallback_detail = instructions[i].stolen[j].address;
-				goto fallback;
-			}
-
-			if (instructions[i].stolen[j].pc_relative == 'y' && displacement_size != 1 && displacement_size != 4){
-				fallback_reason = "unsupported pc-relative displacement size";
-				fallback_detail = instructions[i].stolen[j].address;
-				goto fallback;
-			}
-
-			if (instructions[i].stolen[j].control_flow == 'y' && displacement_size == 1 &&
-				(target_address < detour_start || target_address >= (detour_start + detour_size))){
-				fallback_reason = "short branch escapes the stolen block";
-				fallback_detail = instructions[i].stolen[j].address;
-				goto fallback;
-			}
-			}
-
-			if (!serious_detour_enabled() &&
-				!store_mode_can_use_serious_detour(&instructions[i], parsed_index, instructions[i].stolen_instruction_count)){
-				fallback_reason = "store-only detour would expose the rewritten base register to extra instructions";
-				fallback_detail = instructions[i].address;
-				goto fallback;
-			}
-
-			if (has_external_direct_branch_target(detour_start, detour_start + detour_size)){
-			fallback_reason = "a direct branch targets bytes inside the stolen block";
-			fallback_detail = detour_start;
-			goto fallback;
-		}
-
-		instructions[i].detour_size = detour_size;
-		continue;
-
-fallback:
-			if (serious_detour_enabled() && configure_short_jump_fallback(&instructions[i])){
-				continue;
-			}
-			fail_unsupported_detour(&instructions[i], fallback_reason, fallback_detail);
 	}
 }
 
@@ -853,11 +691,25 @@ void apply_patches(void){
 		printf("applying a patch to instruction with index %d\n",i);
 		fflush(stdout);
 		if (instructions[i].indirect_jump == 'y'){
+			unsigned long landing_pad_address = patches[i].intermediate_zone_address;
+			unsigned long landing_pad_page = landing_pad_address & mask;
+			unsigned long landing_pad_last_page = (landing_pad_address + LANDING_PAD_WIDTH - 1) & mask;
+
 			syscall(10, (instruction_address & mask) - 128, PAGE, PROT_READ | PROT_EXEC |PROT_WRITE);
 			syscall(10, instruction_address & mask, PAGE, PROT_READ | PROT_EXEC |PROT_WRITE);
 			syscall(10, (instruction_address & mask) + PAGE, PAGE, PROT_READ | PROT_EXEC |PROT_WRITE);
+			syscall(10, landing_pad_page, PAGE, PROT_READ | PROT_EXEC |PROT_WRITE);
+			if (landing_pad_last_page != landing_pad_page){
+				syscall(10, landing_pad_last_page, PAGE, PROT_READ | PROT_EXEC |PROT_WRITE);
+			}
 			memcpy((char*)instruction_address,(char*)patches[i].jmp_to_intermediate,2);
-			memcpy((char*)patches[i].intermediate_zone_address,(char*)patches[i].jmp_to_post,5);
+			if (size > 2){
+				memset((char*)instruction_address + 2, 0x90, size - 2);
+			}
+			memcpy((char*)landing_pad_address,(char*)patches[i].jmp_to_post,5);
+			if (LANDING_PAD_WIDTH > 5){
+				memset((char*)landing_pad_address + 5, 0x90, LANDING_PAD_WIDTH - 5);
+			}
 		}
 		else{
 			instruction_patch = (unsigned long)patches[i].jmp_to_post;

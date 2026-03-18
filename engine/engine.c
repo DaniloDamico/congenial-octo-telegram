@@ -44,7 +44,7 @@ typedef struct _thread_startup {
 __thread thread_startup *thread_startup_data;
 
 thread_startup startup_info[THREADS];
-volatile int processed_events[THREADS];
+uint64_t processed_events[THREADS];
 // sampling period (this is setup in seconds)
 #ifdef BENCHMARKING
 #ifndef PERIOD
@@ -180,8 +180,8 @@ void *thread(void *me) {
             ProcessEvent(the_event->destination, the_event->timestamp, the_event->event_type, the_event->payload,
                          the_event->event_size, NULL);
             current = -1;
+            __atomic_add_fetch(&processed_events[aux], 1, __ATOMIC_RELAXED);
         }
-        processed_events[aux]++;
     } while (ret == 0);
 
     free(the_event);
@@ -465,8 +465,7 @@ int main(int argc, char **argv) {
         sleep(PERIOD);
         total = 0;
         for (i = 0; i < THREADS; i++) {
-            total += processed_events[i];
-            processed_events[i] = 0;
+            total += __atomic_exchange_n(&processed_events[i], 0, __ATOMIC_RELAXED);
         }
         throughputs[j] = (float)total / (float)PERIOD;
         j++;

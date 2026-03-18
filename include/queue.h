@@ -32,7 +32,7 @@ typedef struct _fallbacks_slot {
 typedef union _lock_buffer {
     pthread_spinlock_t lock;
     char buff[64];
-} __attribute__((packed)) lock_buffer;
+} lock_buffer;
 
 typedef struct _log_send {
     struct _log_element *head;
