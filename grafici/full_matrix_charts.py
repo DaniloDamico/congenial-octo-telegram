@@ -15,6 +15,7 @@ from .chart_utils import (
     band_centers,
     draw_category_axis,
     draw_legend,
+    draw_model_header,
     draw_value_grid,
     ensure_output_dir,
     mix,
@@ -27,7 +28,7 @@ from .chart_utils import (
 
 
 THROUGHPUT_PANEL = {"top": 170, "height": 420, "width": 470, "gap": 52, "left": 110}
-METRIC_PANEL = {"top": 185, "height": 200, "width": 460, "gap": 52, "left": 110, "row_gap": 135}
+METRIC_PANEL = {"top": 255, "height": 200, "width": 460, "gap": 52, "left": 110, "row_gap": 135}
 
 
 def load_full_matrix_rows() -> list[dict[str, str]]:
@@ -57,11 +58,11 @@ def build_throughput_chart(rows: list[dict[str, str]], output_path: Path) -> Pat
     svg.text(
         890,
         76,
-        "Confronto tra i sette backend su PHOLD, PCS e HIGHWAY con intervalli di confidenza. Ogni pannello usa la propria scala verticale.",
+        "Confronto tra i sette backend su PHOLD, PCS e HIGHWAY con intervalli di confidenza. Le current config dei workload sono riportate sotto il titolo di ogni pannello.",
         size=15,
         fill="#55606E",
     )
-    draw_legend(svg, items=[(MODE_LABELS[mode], MODE_COLORS[mode]) for mode in MODE_ORDER], x=118, y=116)
+    draw_legend(svg, items=[(MODE_LABELS[mode], MODE_COLORS[mode]) for mode in MODE_ORDER], x=118, y=100)
 
     for panel_index, model in enumerate(MODEL_ORDER):
         panel_x = THROUGHPUT_PANEL["left"] + panel_index * (THROUGHPUT_PANEL["width"] + THROUGHPUT_PANEL["gap"])
@@ -70,7 +71,7 @@ def build_throughput_chart(rows: list[dict[str, str]], output_path: Path) -> Pat
         panel_width = THROUGHPUT_PANEL["width"]
         panel_y_max = y_max_by_model[model]
 
-        svg.text(panel_x + (panel_width / 2), panel_y - 24, MODEL_LABELS[model], size=22, weight="700")
+        draw_model_header(svg, model=model, x=panel_x + (panel_width / 2), title_y=panel_y - 38)
         svg.rect(panel_x, panel_y, panel_width, panel_height, fill="none", stroke=AXIS_COLOR, stroke_width=1.2)
         draw_value_grid(svg, x=panel_x, y=panel_y, width=panel_width, height=panel_height, y_max=panel_y_max, label_size=13)
 
@@ -161,13 +162,17 @@ def build_metrics_chart(rows: list[dict[str, str]], output_path: Path) -> Path:
     svg.text(
         890,
         74,
-        "Confronto tra backend tramite istogrammi di rollback, epoch e filtered events. Un pannello per workload e metrica.",
+        "Confronto tra backend tramite istogrammi di rollback, epoch e filtered events. Un pannello per workload e metrica, con current config riportata sopra ogni colonna.",
         size=15,
         fill="#55606E",
     )
-    draw_legend(svg, items=[(MODE_LABELS[mode], MODE_COLORS[mode]) for mode in MODE_ORDER], x=118, y=114)
+    draw_legend(svg, items=[(MODE_LABELS[mode], MODE_COLORS[mode]) for mode in MODE_ORDER], x=118, y=100)
 
     metrics = [("rollbacks", "Rollback"), ("epochs", "Epoch"), ("filtered_events", "Filtered events")]
+
+    for column_index, model in enumerate(MODEL_ORDER):
+        panel_x = METRIC_PANEL["left"] + column_index * (METRIC_PANEL["width"] + METRIC_PANEL["gap"])
+        draw_model_header(svg, model=model, x=panel_x + (METRIC_PANEL["width"] / 2), title_y=METRIC_PANEL["top"] - 95, config_size=11, config_gap=15, config_line_height=13)
 
     for row_index, (metric_key, metric_label) in enumerate(metrics):
         for column_index, model in enumerate(MODEL_ORDER):
@@ -179,14 +184,14 @@ def build_metrics_chart(rows: list[dict[str, str]], output_path: Path) -> Path:
                 y=panel_y,
                 width=METRIC_PANEL["width"],
                 height=METRIC_PANEL["height"],
-                title=f"{MODEL_LABELS[model]} - {metric_label}",
+                title=metric_label,
                 model=model,
                 metric=metric_key,
                 rows=rows,
             )
 
     svg.text(30, 610, "Valore assoluto", size=15, rotate=-90, weight="600")
-    svg.text(890, 1228, "Backend", size=15, weight="600")
+    svg.text(890, 1278, "Backend", size=15, weight="600")
     return render_png(svg, output_path)
 
 

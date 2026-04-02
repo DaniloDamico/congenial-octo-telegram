@@ -18,6 +18,12 @@ PAGE_SIZES_PATH = ROOT / "logs" / "full-matrix-mmap-page-sizes" / "results.tsv"
 MODEL_ORDER = ["phold", "pcs", "highway"]
 MODEL_LABELS = {"phold": "PHOLD", "pcs": "PCS", "highway": "HIGHWAY"}
 
+MODEL_CONFIG_LINES = {
+    "phold": ["cfg: M=1, TA=1.0"],
+    "pcs": ["cfg: TA=0.4, TA_DURATION=120", "TA_CHANGE=300, CHANNELS_PER_CELL=5000"],
+    "highway": ["cfg: TA=12.0, INITIAL_CARS=75"],
+}
+
 MODE_ORDER = [
     "grid_ckpt",
     "grid_ckpt_bs",
@@ -179,6 +185,29 @@ def draw_category_axis(
         svg.text(center, y + label_offset, label, size=label_size, rotate=rotate)
 
 
+def draw_model_header(
+    svg: SvgDocument,
+    *,
+    model: str,
+    x: float,
+    title_y: float,
+    title_size: int = 22,
+    config_size: int = 12,
+    config_gap: float = 17,
+    config_line_height: float = 15,
+) -> None:
+    svg.text(x, title_y, MODEL_LABELS[model], size=title_size, weight="700")
+    for index, line in enumerate(MODEL_CONFIG_LINES.get(model, [])):
+        svg.text(
+            x,
+            title_y + config_gap + (index * config_line_height),
+            line,
+            size=config_size,
+            fill="#55606E",
+            weight="500",
+        )
+
+
 class SvgDocument:
     def __init__(self, width: int, height: int, background: str = BACKGROUND) -> None:
         self.width = width
@@ -308,14 +337,21 @@ class SvgDocument:
 def find_headless_browser() -> str:
     candidates: list[str] = []
 
+    windows_candidates = [
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    ]
+    wsl_windows_candidates = [
+        "/mnt/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+        "/mnt/c/Program Files/Google/Chrome/Application/chrome.exe",
+        "/mnt/c/Program Files (x86)/Google/Chrome/Application/chrome.exe",
+    ]
+
     if os.name == "nt":
-        candidates.extend(
-            [
-                r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-                r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-            ]
-        )
+        candidates.extend(windows_candidates)
+    else:
+        candidates.extend(wsl_windows_candidates)
 
     for name in ("msedge.exe", "chrome.exe", "chromium.exe", "microsoft-edge", "google-chrome", "chromium", "chromium-browser"):
         resolved = shutil.which(name)
@@ -331,21 +367,44 @@ def find_headless_browser() -> str:
     raise RuntimeError("Nessun browser headless compatibile trovato. Installa o rendi disponibile Edge, Chrome o Chromium.")
 
 
+def is_windows_browser(browser: str) -> bool:
+    lower = browser.lower()
+    return lower.endswith('.exe') or lower.startswith('/mnt/')
+
+
+def to_windows_path(path: Path) -> str:
+    return subprocess.run(
+        ['wslpath', '-w', str(path.resolve())],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    ).stdout.strip()
+
+
 def render_png(document: SvgDocument, output_path: Path) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     browser = find_headless_browser()
 
-    with tempfile.TemporaryDirectory(prefix="parsir-grafici-") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="parsir-grafici-", dir=output_path.parent) as temp_dir:
         temp_svg = Path(temp_dir) / "chart.svg"
         temp_svg.write_text(document.to_svg(), encoding="utf-8", newline="\n")
+
+        if is_windows_browser(browser):
+            screenshot_target = to_windows_path(output_path)
+            chart_target = to_windows_path(temp_svg)
+        else:
+            screenshot_target = str(output_path)
+            chart_target = temp_svg.resolve().as_uri()
+
         command = [
             browser,
             "--headless",
             "--disable-gpu",
             "--hide-scrollbars",
             f"--window-size={document.width},{document.height}",
-            f"--screenshot={output_path}",
-            temp_svg.resolve().as_uri(),
+            f"--screenshot={screenshot_target}",
+            chart_target,
         ]
         subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 

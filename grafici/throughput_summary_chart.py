@@ -7,13 +7,13 @@ from .chart_utils import (
     MODE_COLORS,
     MODE_LABELS,
     MODE_ORDER,
-    MODEL_LABELS,
     MODEL_ORDER,
     MVM_MODE_ORDER,
     OUT_DIR,
     SvgDocument,
     band_centers,
     draw_category_axis,
+    draw_model_header,
     draw_value_grid,
     ensure_output_dir,
     mix,
@@ -57,7 +57,7 @@ SUMMARY_DATA = [
     {"model": "highway", "mode": "mmap_mv_store_grid", "variant": "best", "throughput": 365145.765625, "page_size": 512},
 ]
 
-PANEL = {"top": 180, "height": 460, "width": 470, "gap": 52, "left": 110}
+PANEL = {"top": 215, "height": 460, "width": 470, "gap": 52, "left": 110}
 
 
 def build_data() -> dict[str, dict[str, dict[str, float | int]]]:
@@ -72,7 +72,7 @@ def build_data() -> dict[str, dict[str, dict[str, float | int]]]:
 
 def draw_style_legend(svg: SvgDocument, *, x: float, y: float) -> None:
     svg.rect(x, y - 10, 18, 18, fill="#B7C1CE", stroke=AXIS_COLOR, stroke_width=1, rx=3)
-    svg.text(x + 26, y + 3, "full matrix", size=13, anchor="start")
+    svg.text(x + 26, y + 3, "standard config", size=13, anchor="start")
     svg.rect(x + 160, y - 10, 18, 18, fill="#5A6472", stroke=AXIS_COLOR, stroke_width=1, rx=3)
     svg.text(x + 186, y + 3, "best page size", size=13, anchor="start")
 
@@ -92,11 +92,11 @@ def generate_summary_chart() -> list[Path]:
     svg.text(
         890,
         76,
-        "Per le varianti MVM, la barra chiara mostra il throughput della full matrix (pagina 4096) e la barra scura il miglior throughput osservato nel page-size sweep.",
+        "Per le varianti MVM, la barra chiara mostra il throughput della configurazione standard (pagina 4096) e la barra scura il miglior throughput osservato nel page-size sweep. Le current config dei workload sono sotto il titolo del pannello.",
         size=15,
         fill="#55606E",
     )
-    draw_style_legend(svg, x=500, y=114)
+    draw_style_legend(svg, x=500, y=100)
 
     for panel_index, model in enumerate(MODEL_ORDER):
         panel_x = PANEL["left"] + panel_index * (PANEL["width"] + PANEL["gap"])
@@ -105,7 +105,7 @@ def generate_summary_chart() -> list[Path]:
         panel_height = PANEL["height"]
         panel_y_max = y_max_by_model[model]
 
-        svg.text(panel_x + (panel_width / 2), panel_y - 24, MODEL_LABELS[model], size=22, weight="700")
+        draw_model_header(svg, model=model, x=panel_x + (panel_width / 2), title_y=panel_y - 48)
         svg.rect(panel_x, panel_y, panel_width, panel_height, fill="none", stroke=AXIS_COLOR, stroke_width=1.2)
         draw_value_grid(svg, x=panel_x, y=panel_y, width=panel_width, height=panel_height, y_max=panel_y_max, label_size=13)
 

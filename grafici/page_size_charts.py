@@ -17,6 +17,7 @@ from .chart_utils import (
     SvgDocument,
     compact_number,
     draw_category_axis,
+    draw_model_header,
     draw_value_grid,
     ensure_output_dir,
     nice_upper_bound,
@@ -31,8 +32,8 @@ PAGE_ORDER = [128, 256, 512, 1024, 2048, 4096]
 PAGE_LABELS = [str(value) for value in PAGE_ORDER]
 PAGE_LOG_MIN = math.log2(PAGE_ORDER[0])
 PAGE_LOG_MAX = math.log2(PAGE_ORDER[-1])
-THROUGHPUT_PANEL = {"top": 170, "height": 420, "width": 470, "gap": 52, "left": 110}
-METRIC_PANEL = {"top": 170, "height": 205, "width": 460, "gap": 52, "left": 110, "row_gap": 94}
+THROUGHPUT_PANEL = {"top": 215, "height": 420, "width": 470, "gap": 52, "left": 110}
+METRIC_PANEL = {"top": 255, "height": 205, "width": 460, "gap": 52, "left": 110, "row_gap": 94}
 
 
 def load_page_size_rows() -> list[dict[str, float | int | str]]:
@@ -110,11 +111,11 @@ def build_throughput_chart(rows: list[dict[str, float | int | str]], output_path
     svg.text(
         890,
         76,
-        "Sensibilita del throughput delle varianti MVM alla dimensione di pagina. Il punto a 4096 byte e il default della full matrix; ogni pannello usa la propria scala verticale.",
+        "Sensibilita del throughput delle varianti MVM alla dimensione di pagina. Il punto a 4096 byte e il default della full matrix; le current config dei workload sono riportate sotto il titolo di ogni pannello.",
         size=15,
         fill="#55606E",
     )
-    draw_line_legend(svg, x=430, y=114)
+    draw_line_legend(svg, x=430, y=100)
 
     for panel_index, model in enumerate(MODEL_ORDER):
         panel_x = THROUGHPUT_PANEL["left"] + panel_index * (THROUGHPUT_PANEL["width"] + THROUGHPUT_PANEL["gap"])
@@ -123,7 +124,7 @@ def build_throughput_chart(rows: list[dict[str, float | int | str]], output_path
         panel_width = THROUGHPUT_PANEL["width"]
         panel_y_max = y_max_by_model[model]
 
-        svg.text(panel_x + (panel_width / 2), panel_y - 24, MODEL_LABELS[model], size=22, weight="700")
+        draw_model_header(svg, model=model, x=panel_x + (panel_width / 2), title_y=panel_y - 48)
         default_x = page_to_x(4096, panel_x, panel_width)
         svg.rect(default_x - 16, panel_y, 32, panel_height, fill="#FFF4D6", stroke="none", opacity=0.75)
         svg.text(default_x, panel_y - 6, "default", size=11, fill="#8A5A00")
@@ -206,13 +207,17 @@ def build_metrics_chart(rows: list[dict[str, float | int | str]], output_path: P
     svg.text(
         890,
         74,
-        "Variazione di rollback, epoch e filtered events al cambiare della pagina per le tre varianti MVM.",
+        "Variazione di rollback, epoch e filtered events al cambiare della pagina per le tre varianti MVM, con current config riportata sopra ogni colonna.",
         size=15,
         fill="#55606E",
     )
-    draw_line_legend(svg, x=430, y=112)
+    draw_line_legend(svg, x=430, y=100)
 
     metrics = [("rollbacks", "Rollback"), ("epochs", "Epoch"), ("filtered_events", "Filtered events")]
+
+    for column_index, model in enumerate(MODEL_ORDER):
+        panel_x = METRIC_PANEL["left"] + column_index * (METRIC_PANEL["width"] + METRIC_PANEL["gap"])
+        draw_model_header(svg, model=model, x=panel_x + (METRIC_PANEL["width"] / 2), title_y=METRIC_PANEL["top"] - 98)
 
     for row_index, (metric_key, metric_label) in enumerate(metrics):
         for column_index, model in enumerate(MODEL_ORDER):
@@ -224,7 +229,7 @@ def build_metrics_chart(rows: list[dict[str, float | int | str]], output_path: P
                 y=panel_y,
                 width=METRIC_PANEL["width"],
                 height=METRIC_PANEL["height"],
-                title=f"{MODEL_LABELS[model]} - {metric_label}",
+                title=metric_label,
                 model=model,
                 metric=metric_key,
                 rows=rows,
