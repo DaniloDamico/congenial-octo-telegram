@@ -364,7 +364,7 @@ def find_headless_browser() -> str:
             seen.add(candidate)
             return candidate
 
-    raise RuntimeError("Nessun browser headless compatibile trovato. Installa o rendi disponibile Edge, Chrome o Chromium.")
+    raise RuntimeError("No compatible headless browser found. Install or make Edge, Chrome, or Chromium available.")
 
 
 def is_windows_browser(browser: str) -> bool:

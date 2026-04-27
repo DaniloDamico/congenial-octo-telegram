@@ -4,12 +4,14 @@ from pathlib import Path
 
 from .chart_utils import (
     AXIS_COLOR,
+    FULL_MATRIX_PATH,
     MODE_COLORS,
     MODE_LABELS,
     MODE_ORDER,
     MODEL_ORDER,
     MVM_MODE_ORDER,
     OUT_DIR,
+    PAGE_SIZES_PATH,
     SvgDocument,
     band_centers,
     draw_category_axis,
@@ -18,61 +20,44 @@ from .chart_utils import (
     ensure_output_dir,
     mix,
     nice_upper_bound,
+    read_tsv,
     render_png,
+    to_float,
 )
-
-
-SUMMARY_DATA = [
-    {"model": "phold", "mode": "grid_ckpt", "variant": "full", "throughput": 44614.073698},
-    {"model": "phold", "mode": "grid_ckpt_bs", "variant": "full", "throughput": 2948.066650},
-    {"model": "phold", "mode": "chunk_ckpt", "variant": "full", "throughput": 28623.119922},
-    {"model": "phold", "mode": "chunk_full_ckpt", "variant": "full", "throughput": 3361.179997},
-    {"model": "phold", "mode": "mmap_mv", "variant": "full", "throughput": 20457.680143},
-    {"model": "phold", "mode": "mmap_mv", "variant": "best", "throughput": 45623.839844, "page_size": 128},
-    {"model": "phold", "mode": "mmap_mv_store", "variant": "full", "throughput": 20423.573242},
-    {"model": "phold", "mode": "mmap_mv_store", "variant": "best", "throughput": 58053.647005, "page_size": 128},
-    {"model": "phold", "mode": "mmap_mv_store_grid", "variant": "full", "throughput": 56321.493750},
-    {"model": "phold", "mode": "mmap_mv_store_grid", "variant": "best", "throughput": 62836.466406, "page_size": 512},
-
-    {"model": "pcs", "mode": "grid_ckpt", "variant": "full", "throughput": 276908.645313},
-    {"model": "pcs", "mode": "grid_ckpt_bs", "variant": "full", "throughput": 46506.459766},
-    {"model": "pcs", "mode": "chunk_ckpt", "variant": "full", "throughput": 58834.399740},
-    {"model": "pcs", "mode": "chunk_full_ckpt", "variant": "full", "throughput": 248375.586458},
-    {"model": "pcs", "mode": "mmap_mv", "variant": "full", "throughput": 93036.346354},
-    {"model": "pcs", "mode": "mmap_mv", "variant": "best", "throughput": 137634.780729, "page_size": 256},
-    {"model": "pcs", "mode": "mmap_mv_store", "variant": "full", "throughput": 235957.155729},
-    {"model": "pcs", "mode": "mmap_mv_store", "variant": "best", "throughput": 263027.998958, "page_size": 1024},
-    {"model": "pcs", "mode": "mmap_mv_store_grid", "variant": "full", "throughput": 175180.967708},
-    {"model": "pcs", "mode": "mmap_mv_store_grid", "variant": "best", "throughput": 203793.599479, "page_size": 512},
-
-    {"model": "highway", "mode": "grid_ckpt", "variant": "full", "throughput": 512164.340625},
-    {"model": "highway", "mode": "grid_ckpt_bs", "variant": "full", "throughput": 28291.486198},
-    {"model": "highway", "mode": "chunk_ckpt", "variant": "full", "throughput": 566732.789583},
-    {"model": "highway", "mode": "chunk_full_ckpt", "variant": "full", "throughput": 419603.495833},
-    {"model": "highway", "mode": "mmap_mv", "variant": "full", "throughput": 286315.508333},
-    {"model": "highway", "mode": "mmap_mv", "variant": "best", "throughput": 392242.700000, "page_size": 512},
-    {"model": "highway", "mode": "mmap_mv_store", "variant": "full", "throughput": 253575.646354},
-    {"model": "highway", "mode": "mmap_mv_store", "variant": "best", "throughput": 385521.377083, "page_size": 1024},
-    {"model": "highway", "mode": "mmap_mv_store_grid", "variant": "full", "throughput": 281229.052083},
-    {"model": "highway", "mode": "mmap_mv_store_grid", "variant": "best", "throughput": 365145.765625, "page_size": 512},
-]
 
 PANEL = {"top": 215, "height": 460, "width": 470, "gap": 52, "left": 110}
 
 
 def build_data() -> dict[str, dict[str, dict[str, float | int]]]:
     data = {model: {mode: {} for mode in MODE_ORDER} for model in MODEL_ORDER}
-    for item in SUMMARY_DATA:
-        slot = data[item["model"]][item["mode"]]
-        slot[item["variant"]] = float(item["throughput"])
-        if "page_size" in item:
-            slot["page_size"] = int(item["page_size"])
+
+    full_rows = [
+        row
+        for row in read_tsv(FULL_MATRIX_PATH)
+        if row["status"] == "OK" and row["throughput_mean"]
+    ]
+    for row in full_rows:
+        data[row["model"]][row["mode"]]["full"] = to_float(row["throughput_mean"])
+
+    page_rows = [
+        row
+        for row in read_tsv(PAGE_SIZES_PATH)
+        if row["status"] == "OK" and row["throughput_mean"]
+    ]
+    for model in MODEL_ORDER:
+        for mode in MVM_MODE_ORDER:
+            candidates = [row for row in page_rows if row["model"] == model and row["mode"] == mode]
+            if not candidates:
+                continue
+            best = max(candidates, key=lambda row: to_float(row["throughput_mean"]))
+            data[model][mode]["best"] = to_float(best["throughput_mean"])
+            data[model][mode]["page_size"] = int(best["page_size"])
     return data
 
 
 def draw_style_legend(svg: SvgDocument, *, x: float, y: float) -> None:
     svg.rect(x, y - 10, 18, 18, fill="#B7C1CE", stroke=AXIS_COLOR, stroke_width=1, rx=3)
-    svg.text(x + 26, y + 3, "standard config", size=13, anchor="start")
+    svg.text(x + 26, y + 3, "default 4096-byte config", size=13, anchor="start")
     svg.rect(x + 160, y - 10, 18, 18, fill="#5A6472", stroke=AXIS_COLOR, stroke_width=1, rx=3)
     svg.text(x + 186, y + 3, "best page size", size=13, anchor="start")
 
@@ -92,7 +77,7 @@ def generate_summary_chart() -> list[Path]:
     svg.text(
         890,
         76,
-        "Per le varianti MVM, la barra chiara mostra il throughput della configurazione standard (pagina 4096) e la barra scura il miglior throughput osservato nel page-size sweep. Le current config dei workload sono sotto il titolo del pannello.",
+        "For the MVM variants, the light bar shows the throughput of the default 4096-byte configuration and the dark bar shows the best throughput observed in the page-size sweep. The current workload configuration is shown below each panel title.",
         size=15,
         fill="#55606E",
     )
@@ -146,8 +131,8 @@ def generate_summary_chart() -> list[Path]:
             label_size=11,
             rotate=-35,
         )
-        svg.text(panel_x + (panel_width / 2), panel_y + panel_height + 86, "Backend / variante", size=14, weight="600")
+        svg.text(panel_x + (panel_width / 2), panel_y + panel_height + 86, "Backend / variant", size=14, weight="600")
 
-    svg.text(36, PANEL["top"] + (PANEL["height"] / 2), "Throughput medio (eventi/s)", size=15, rotate=-90, weight="600")
+    svg.text(36, PANEL["top"] + (PANEL["height"] / 2), "Average throughput (events/s)", size=15, rotate=-90, weight="600")
     output_path = OUT_DIR / "throughput_summary.png"
     return [render_png(svg, output_path)]

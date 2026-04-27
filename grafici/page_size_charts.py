@@ -111,7 +111,7 @@ def build_throughput_chart(rows: list[dict[str, float | int | str]], output_path
     svg.text(
         890,
         76,
-        "Sensibilita del throughput delle varianti MVM alla dimensione di pagina. Il punto a 4096 byte e il default della full matrix; le current config dei workload sono riportate sotto il titolo di ogni pannello.",
+        "Throughput sensitivity of the MVM variants to page size. The point at 4096 bytes marks the default used in the full-matrix comparison; the current workload configuration is shown below each panel title.",
         size=15,
         fill="#55606E",
     )
@@ -155,9 +155,9 @@ def build_throughput_chart(rows: list[dict[str, float | int | str]], output_path
                 svg.circle(px, py, 5.5, fill=color)
 
         draw_page_axis(svg, x=panel_x, y=panel_y + panel_height, width=panel_width)
-        svg.text(panel_x + (panel_width / 2), panel_y + panel_height + 62, "Dimensione pagina (byte)", size=14, weight="600")
+        svg.text(panel_x + (panel_width / 2), panel_y + panel_height + 62, "Page size (bytes)", size=14, weight="600")
 
-    svg.text(36, THROUGHPUT_PANEL["top"] + (THROUGHPUT_PANEL["height"] / 2), "Throughput medio (eventi/s)", size=15, rotate=-90, weight="600")
+    svg.text(36, THROUGHPUT_PANEL["top"] + (THROUGHPUT_PANEL["height"] / 2), "Average throughput (events/s)", size=15, rotate=-90, weight="600")
     return render_png(svg, output_path)
 
 
@@ -203,11 +203,11 @@ def draw_metric_panel(
 
 def build_metrics_chart(rows: list[dict[str, float | int | str]], output_path: Path) -> Path:
     svg = SvgDocument(1780, 1240)
-    svg.text(890, 46, "MVM page-size sweep - metriche di contesto", size=28, weight="700")
+    svg.text(890, 46, "MVM page-size sweep - context metrics", size=28, weight="700")
     svg.text(
         890,
         74,
-        "Variazione di rollback, epoch e filtered events al cambiare della pagina per le tre varianti MVM, con current config riportata sopra ogni colonna.",
+        "Variation of rollbacks, epochs, and filtered events across page sizes for the three MVM variants, with the current configuration shown above each column.",
         size=15,
         fill="#55606E",
     )
@@ -235,8 +235,8 @@ def build_metrics_chart(rows: list[dict[str, float | int | str]], output_path: P
                 rows=rows,
             )
 
-    svg.text(30, 540, "Valore assoluto", size=15, rotate=-90, weight="600")
-    svg.text(890, 1188, "Dimensione pagina (byte)", size=15, weight="600")
+    svg.text(30, 540, "Absolute value", size=15, rotate=-90, weight="600")
+    svg.text(890, 1188, "Page size (bytes)", size=15, weight="600")
     return render_png(svg, output_path)
 
 

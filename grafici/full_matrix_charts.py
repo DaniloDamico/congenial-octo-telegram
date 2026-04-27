@@ -58,7 +58,7 @@ def build_throughput_chart(rows: list[dict[str, str]], output_path: Path) -> Pat
     svg.text(
         890,
         76,
-        "Confronto tra i sette backend su PHOLD, PCS e HIGHWAY con intervalli di confidenza. Le current config dei workload sono riportate sotto il titolo di ogni pannello.",
+        "Comparison of seven backends on PHOLD, PCS, and HIGHWAY with confidence intervals. The current workload configuration is shown below each panel title.",
         size=15,
         fill="#55606E",
     )
@@ -106,7 +106,7 @@ def build_throughput_chart(rows: list[dict[str, str]], output_path: Path) -> Pat
         )
         svg.text(panel_x + (panel_width / 2), panel_y + panel_height + 92, "Backend", size=14, weight="600")
 
-    svg.text(36, THROUGHPUT_PANEL["top"] + (THROUGHPUT_PANEL["height"] / 2), "Throughput medio (eventi/s)", size=15, rotate=-90, weight="600")
+    svg.text(36, THROUGHPUT_PANEL["top"] + (THROUGHPUT_PANEL["height"] / 2), "Average throughput (events/s)", size=15, rotate=-90, weight="600")
     return render_png(svg, output_path)
 
 
@@ -158,11 +158,11 @@ def draw_metric_panel(
 
 def build_metrics_chart(rows: list[dict[str, str]], output_path: Path) -> Path:
     svg = SvgDocument(1780, 1280)
-    svg.text(890, 46, "Full Matrix - metriche di contesto", size=28, weight="700")
+    svg.text(890, 46, "Full Matrix - context metrics", size=28, weight="700")
     svg.text(
         890,
         74,
-        "Confronto tra backend tramite istogrammi di rollback, epoch e filtered events. Un pannello per workload e metrica, con current config riportata sopra ogni colonna.",
+        "Comparison across backends using bar charts for rollbacks, epochs, and filtered events. One panel per workload and metric, with the current configuration shown above each column.",
         size=15,
         fill="#55606E",
     )
@@ -190,7 +190,7 @@ def build_metrics_chart(rows: list[dict[str, str]], output_path: Path) -> Path:
                 rows=rows,
             )
 
-    svg.text(30, 610, "Valore assoluto", size=15, rotate=-90, weight="600")
+    svg.text(30, 610, "Absolute value", size=15, rotate=-90, weight="600")
     svg.text(890, 1278, "Backend", size=15, weight="600")
     return render_png(svg, output_path)
 
